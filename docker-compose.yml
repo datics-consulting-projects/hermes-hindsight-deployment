@@ -1,0 +1,124 @@
+# Hermes Agent + Hindsight (PostgreSQL-backed) — VPS deployment
+#
+# Layout:
+#   hermes        -> gateway daemon, dashboard backend published only on the
+#                    Tailscale IP (used by Hermes Desktop's "Remote Gateway")
+#   hindsight     -> memory server, reachable only from the "hermes" container
+#                    over the internal docker network (not published)
+#   hindsight-db  -> PostgreSQL + pgvector, internal only
+#
+# Usage:
+#   cp .env.example .env   # fill in values, see README.md
+#   docker compose up -d
+#   docker compose logs -f
+
+services:
+  hermes:
+    image: nousresearch/hermes-agent:latest
+    container_name: hermes
+    restart: unless-stopped
+    command: gateway run
+    ports:
+      # Dashboard backend (port 9119) — this is what Hermes Desktop's
+      # "Remote Gateway" connects to. Bound to the Tailscale IP only, so it
+      # is never reachable on the public interface (defense in depth on top
+      # of the Hostinger firewall, which already blocks all public traffic).
+      #
+      # The ":?" guard is load-bearing: with a plain ${TAILSCALE_IP} an empty
+      # or missing value silently renders as "9119:9119", which binds every
+      # interface including the public one. Failing to start is the correct
+      # behaviour here.
+      - "${TAILSCALE_IP:?set TAILSCALE_IP in .env (see: tailscale ip -4)}:9119:9119"
+    environment:
+      - HERMES_DASHBOARD=1
+      # Non-loopback binds require an auth provider or the dashboard refuses
+      # to start. Basic auth is the simplest choice for a trusted Tailscale-only
+      # network. Guarded so an unset value can't become an empty password.
+      - HERMES_DASHBOARD_BASIC_AUTH_USERNAME=${HERMES_DASHBOARD_USER:?set HERMES_DASHBOARD_USER in .env}
+      - HERMES_DASHBOARD_BASIC_AUTH_PASSWORD=${HERMES_DASHBOARD_PASSWORD:?set HERMES_DASHBOARD_PASSWORD in .env}
+      - HERMES_DASHBOARD_BASIC_AUTH_SECRET=${HERMES_DASHBOARD_SECRET:?set HERMES_DASHBOARD_SECRET in .env}
+      # Point the native Hindsight memory provider at the sidecar container.
+      - HINDSIGHT_MODE=local_external
+      - HINDSIGHT_API_URL=http://hindsight:8888
+      # Chat-model API key for Hermes itself. Listed bare (no "=${...}") on
+      # purpose: that form passes the variable through only when it is set,
+      # instead of injecting an empty string that would shadow the key the
+      # setup wizard wrote into /opt/data/.env. Swap in ANTHROPIC_API_KEY /
+      # OPENAI_API_KEY here if you use a different provider.
+      #
+      # NOTE: the *model name* cannot be set from the environment — see
+      # "Choosing the Hermes chat model" in README.md.
+      - OPENROUTER_API_KEY
+    volumes:
+      - hermes_data:/opt/data
+    networks:
+      - hermes-net
+    depends_on:
+      - hindsight
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+          cpus: "2.0"
+
+  hindsight:
+    image: ghcr.io/vectorize-io/hindsight:${HINDSIGHT_VERSION:-latest}
+    container_name: hindsight
+    restart: unless-stopped
+    environment:
+      - HINDSIGHT_API_LLM_PROVIDER=${HINDSIGHT_LLM_PROVIDER:-openai}
+      - HINDSIGHT_API_LLM_API_KEY=${HINDSIGHT_LLM_API_KEY:?set HINDSIGHT_LLM_API_KEY in .env}
+      # Extraction/synthesis model. Bare form again: unset means "use the
+      # provider default" rather than "use the empty model".
+      - HINDSIGHT_API_LLM_MODEL
+      - HINDSIGHT_API_DATABASE_URL=postgresql://${HINDSIGHT_DB_USER:-hindsight_user}:${HINDSIGHT_DB_PASSWORD:?set HINDSIGHT_DB_PASSWORD in .env}@hindsight-db:5432/${HINDSIGHT_DB_NAME:-hindsight_db}
+      # Stable worker identity so in-flight jobs survive a container restart.
+      - HINDSIGHT_API_WORKER_ID=hindsight-vega
+    # Not published — only "hermes" needs to reach this, over the internal
+    # network. Uncomment below if you want to reach Hindsight's own memory
+    # browser UI (port 9999) from your laptop via Tailscale.
+    # ports:
+    #   - "${TAILSCALE_IP}:9999:9999"
+    depends_on:
+      hindsight-db:
+        condition: service_healthy
+    networks:
+      - hermes-net
+
+  hindsight-db:
+    image: pgvector/pgvector:pg${HINDSIGHT_DB_VERSION:-18}
+    container_name: hindsight-db
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=${HINDSIGHT_DB_USER:-hindsight_user}
+      - POSTGRES_PASSWORD=${HINDSIGHT_DB_PASSWORD:?set HINDSIGHT_DB_PASSWORD in .env}
+      - POSTGRES_DB=${HINDSIGHT_DB_NAME:-hindsight_db}
+    # Lets "hindsight" wait for a database that actually accepts connections,
+    # instead of crash-looping through its first few restarts on a cold boot.
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U ${HINDSIGHT_DB_USER:-hindsight_user} -d ${HINDSIGHT_DB_NAME:-hindsight_db}
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    volumes:
+      - hindsight_pg_data:/var/lib/postgresql/${HINDSIGHT_DB_VERSION:-18}/docker
+    networks:
+      - hermes-net
+    # Not published — internal only.
+
+networks:
+  hermes-net:
+    driver: bridge
+
+# Explicit names. Without these, Compose prefixes each volume with the project
+# name (e.g. "hermes-stack_hermes_data"), so the setup wizard in README step 3
+# and the backup commands — which refer to the bare names — would silently
+# read and write a *different* volume than the stack mounts.
+volumes:
+  hermes_data:
+    name: hermes_data
+  hindsight_pg_data:
+    name: hindsight_pg_data
