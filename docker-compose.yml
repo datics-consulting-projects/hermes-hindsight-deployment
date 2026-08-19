@@ -26,7 +26,7 @@ services:
     # profiles by hand, and watch how Hermes actually resolves them before
     # committing the compose file to one. Add "-p backoffice" here to switch the
     # gateway to the mounted persona; that is the only change required.
-    command: gateway run
+    command: gateway run -p backoffice
     ports:
       # Dashboard backend (port 9119) — this is what Hermes Desktop's
       # "Remote Gateway" connects to. Bound to the Tailscale IP only, so it
@@ -178,7 +178,17 @@ networks:
 # and the backup commands — which refer to the bare names — would silently
 # read and write a *different* volume than the stack mounts.
 volumes:
+  # Created out of band by "docker volume create hermes_data" in README step 3,
+  # so the setup wizard can write config, credentials and the model choice into
+  # it before this stack ever runs. Compose therefore does not own it, and says
+  # so on every "up" unless told. Declaring it external is not just to silence
+  # that: it stops "down -v" from deleting the agent's credentials and sessions,
+  # and turns a missing volume into a startup error instead of a fresh empty one
+  # that would start hermes with no wizard config at all. The tradeoff is that a
+  # new deployment must create the volume before "up" — README step 3 already
+  # does, in that order, for the wizard's sake.
   hermes_data:
     name: hermes_data
+    external: true
   hindsight_pg_data:
     name: hindsight_pg_data
