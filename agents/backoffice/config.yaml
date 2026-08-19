@@ -22,7 +22,7 @@
 # and setup step 6).
 
 # The agent's own chat model. No env var exists for this — see README.
-model: openrouter/anthropic/claude-sonnet-4
+model: "openrouter/nvidia/nemotron-3.5-lightning:free"
 
 memory:
   provider: hindsight
