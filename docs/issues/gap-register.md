@@ -12,6 +12,7 @@ Priority reflects *actual risk today*, not position in the roadmap.
 |---|---|---|---|
 | [G6](#g6--backups-documented-but-not-scheduled) | **P1** | Backups documented but not scheduled | Open |
 | [G3](#g3--agentsbackofficesoulmd-is-empty) | **P1** | `agents/backoffice/SOUL.md` is empty | Open |
+| [G8](#g8--slack-opens-before-the-readerwriter-split) | P2 | Slack opens before the reader/writer split (§10.1) | Open — mitigated |
 | [G1](#g1--notion_api_key-is-declared-but-reaches-no-container) | P2 | `NOTION_API_KEY` declared but reaches no container | Open |
 | [G5](#g5--images-track-latest) | P2 | Images track `:latest` | Open |
 | [G7](#g7--hindsight-has-no-resource-limit) | P3 | Hindsight has no resource limit | Open |
@@ -91,7 +92,7 @@ secrets. The long form fails with `bind source path does not exist` instead, mat
 1. **The gateway runs the `default` profile** (`command: gateway run`), so nothing reads
    `/opt/data/profiles/backoffice/`. The mount is correct and proven; it is simply not pointed at
    by the running agent. This is a deliberate staging state while the multi-profile topology is
-   established on the VPS — see README § "Profiles: the open question" — **not** a silent
+   established on the VPS — see README § "Profiles" — **not** a silent
    regression, but the observable symptom is the same as G2's: edits to `agents/` change nothing.
    Closes with one word in the compose `command:`.
 2. **`agents/backoffice/SOUL.md` is still empty (G3).** Once the `-p` switch lands, an empty file
@@ -248,3 +249,57 @@ than by number.
 ```sh
 grep -n '§' agents/template/SOUL.md
 ```
+
+---
+
+## G8 — Slack opens before the reader/writer split
+
+**Priority:** P2 — a knowing deviation with a mitigation, not an oversight. It becomes P1 the day
+§4 ships.
+
+Plan §6 states the condition plainly: *"Do not open Slack before §10.1 is in place. The reader/
+writer split is a prerequisite, not a follow-up."* Slack is being opened anyway.
+
+**Why the deviation is defensible today.** The threat §10.1 defends against is untrusted *tool
+output* — a poisoned Notion note reaching the process that writes memory. That path does not exist
+yet: §4 has not shipped, so the agent holds no `crm_*` tools, and
+`agents/backoffice/config.yaml` disables the `web`, `terminal`, `files` and `browser` toolsets.
+What Slack actually adds is narrower: people who are not you can now say things that Hermes syncs
+to Hindsight after each response, where they become durable memory.
+
+**Mitigation in place:**
+
+| Control | Where | Effect |
+|---|---|---|
+| `memory.write_approval: true` | `agents/backoffice/config.yaml` | Retention is staged for review instead of landing silently. This is the load-bearing one. |
+| `app_mention` as the only bot event | `agents/backoffice/slack-manifest.yaml` | Slack never delivers the channel's other messages, so mention-only holds at the Slack layer even if the config key is wrong. |
+| One channel, explicit allowlist | the `/invite`, and `channels.slack` | The bot cannot read channels it was not invited to. Never `GATEWAY_ALLOW_ALL_USERS=true`. |
+| No DM scopes | `slack-manifest.yaml` | No second, unwitnessed surface — plan §6.2. |
+
+**What this does *not* buy.** Write approval is a review queue, and a review queue only works while
+someone reads it. Left unattended it degrades into a rubber stamp, at which point the deviation is
+no longer mitigated — it is just unrecorded.
+
+**Closing condition — any one of:**
+
+1. §10.1 is built (plan §13.1 step 4) and the §14 boundary tests are green. Then write approval
+   can be relaxed on its own merits.
+2. **§4 ships.** Not a choice: the moment `crm_*` tools reach the Slack-facing profile, the exact
+   path §10.1 exists to close is open, and the interim stops being sufficient. Do not let step 2 of
+   plan §13.1 land before step 4.
+3. Slack is withdrawn.
+
+**Verify the mitigation is actually live, not just committed:**
+
+```sh
+docker exec hermes hermes config get memory -p backoffice     # write_approval: true
+docker exec hermes hermes pairing list                        # allowlist, not all-users
+./scripts/slack-preflight.sh verify
+```
+
+Then, in the channel: post **without** an @-mention and confirm silence, and @-mention from a
+non-allowlisted account and confirm no reply. A misparsed read-only config fails *open*, so these
+two negative tests are the ones that actually prove the boundary.
+
+**Related:** plan §6, §10.1, §13.1 step 4; G1 (the other credential that must not reach a
+Slack-facing agent before the screening layer exists).

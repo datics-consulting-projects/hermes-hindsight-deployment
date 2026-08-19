@@ -108,7 +108,7 @@ Hermes' OpenAI-compatible API server (:8642) is unset and unused. Nothing in thi
   `agents/backoffice/{SOUL.md,config.yaml,.env}` are bind-mounted `:ro` into
   `/opt/data/profiles/backoffice/`, while memories, sessions and skills stay writable in the volume.
   Nothing reads those files until `command:` gains `-p backoffice`. Deliberate — the multi-profile
-  topology is being established on the VPS first (§9.2, and README § "Profiles: the open question").
+  topology is being established on the VPS first (§9.2, and README § "Profiles").
 
 ### 1.3 What does not exist yet
 
@@ -606,7 +606,11 @@ authentication**, so if you enable it, bind it to the Tailscale IP only — neve
 
 ## 6. Slack
 
-**Status:** not built. No app, no tokens, no vars in `.env.example` or the compose file.
+**Status:** wired in the repo. `agents/backoffice/slack-manifest.yaml` carries the scopes, the
+channel block lives in `agents/backoffice/config.yaml`, the token slots are in
+`agents/backoffice/.env.example`, and `scripts/slack-preflight.sh` + `scripts/deploy.sh` drive the
+VPS. What remains is the Slack-side app itself (§6.1) and one `channels.slack` key-name check
+against the running build. **`docker-compose.yml` needed no change at all.**
 
 Slack uses **Socket Mode** (outbound WebSocket), so the container needs no inbound port. This fits
 the current topology exactly — nothing about the Tailscale-only posture has to change.
@@ -615,28 +619,29 @@ the current topology exactly — nothing about the Tailscale-only posture has to
 
 | Step | Action | Result |
 |---|---|---|
-| 1 | Generate manifest: `hermes slack manifest --agent-view --write` | manifest JSON |
+| 1 | Manifest is committed: `agents/backoffice/slack-manifest.yaml`. Diff it against `hermes slack manifest --agent-view` via `./scripts/slack-preflight.sh discover` | manifest YAML, in git |
 | 2 | api.slack.com/apps → Create New App → From manifest | App created |
 | 3 | Enable Socket Mode | App-level token (`xapp-`) |
 | 4 | Subscribe to events (see §6.2) | Bot sees messages |
 | 5 | Install App to Workspace | Bot token (`xoxb-`) |
-| 6 | Add tokens to `.env` **and to the `hermes` service `environment:` list** | Slack connected |
+| 6 | Add tokens to `agents/backoffice/.env`; verify with `./scripts/slack-preflight.sh check` | Slack connected |
 
-Step 6 is the one the predecessor plans get wrong for this repo: they assume a profile `.env` on a
-host filesystem. Here secrets arrive either through the compose `environment:` list or through the
-`.env` inside the `hermes_data` volume. Follow the existing convention — bare pass-through form,
-so an unset var doesn't shadow a wizard-written value:
+**Step 6 as originally written here is superseded, and this is the one place the repo has moved
+past the plan.** The text below assumed secrets could only arrive through the compose
+`environment:` list or the `.env` inside the `hermes_data` volume. Since then the deployment gained
+a per-agent mount — `agents/backoffice/.env` → `/opt/data/profiles/backoffice/.env`, read-only,
+gitignored, `create_host_path: false` — and Slack tokens belong there instead.
 
-```yaml
-environment:
-  - SLACK_BOT_TOKEN
-  - SLACK_APP_TOKEN
-  - SLACK_SIGNING_SECRET
-  - SLACK_ALLOWED_USERS
-  - SLACK_HOME_CHANNEL
-```
+The reason is not tidiness. The compose `environment:` list is **container-wide**: a `sales`
+profile added later would silently inherit the backoffice bot's tokens and be able to post as it.
+One Slack app per agent, one token set per agent, scoped in Slack itself — the same access-scoping
+argument §0 makes for Notion. The rule now lives at the top of `agents/backoffice/.env.example`:
+container-wide secrets in the root `.env`, per-agent secrets in the per-agent file.
 
-Add matching entries to `.env.example` — and unlike G1, wire them up in the same commit.
+`SLACK_ALLOWED_USERS` and `SLACK_HOME_CHANNEL` are **not** secrets and move in the other direction,
+into `agents/backoffice/config.yaml`, where widening the allowlist is a reviewable commit instead
+of an untracked edit on the VPS. They stay env vars only if the build turns out to offer no config
+key for them.
 
 To find a Slack member ID: avatar → View full profile → More → Copy member ID. Starts with `U`.
 
@@ -658,11 +663,21 @@ trail. Revisit only after the pilot, with a stated reason.
 
 ### 6.3 Constrain it
 
+In `agents/backoffice/config.yaml` — mounted `:ro`, so this is code, not a `config set` on the
+server:
+
 ```yaml
 channels:
   slack:
     respondTo: mention        # silent until @-mentioned
 ```
+
+**Do this twice, in two layers.** The committed manifest subscribes to `app_mention` and nothing
+else, so Slack never delivers the channel's other messages at all. That holds even if the config
+key above is wrong or silently ignored — which matters, because a misparsed config fails *open*
+(the agent answers everyone). Config is the second layer, the manifest is the first. If discovery
+shows Hermes needs `message.channels` to function, adding it is a real widening of exposure, not a
+formality.
 
 - Invite the bot to **exactly one channel** for the pilot. It cannot read channels it isn't in.
 - Populate the allowlist explicitly. **Never `GATEWAY_ALLOW_ALL_USERS=true`.**
@@ -674,6 +689,13 @@ follow-ups, and anything said in it is context for everyone in it. That is inten
 > **Do not open Slack before §10.1 is in place.** Slack is the first surface where people who are
 > not you can put text in front of the agent, and where §4's untrusted notes become reachable by
 > more than one person. The reader/writer split is a prerequisite, not a follow-up.
+
+**This warning has been knowingly deviated from, not resolved.** Slack is being opened ahead of
+§10.1 behind an interim gate — `memory.write_approval: true`, one channel, explicit allowlist —
+which is defensible only because §4 has not shipped: the agent holds no CRM or Notion tools, so
+the exposure is channel members writing memory, not poisoned tool output reaching the write path.
+The moment §4 lands, the interim stops being sufficient. Recorded with its closing condition as
+[gap-register G8](../issues/gap-register.md).
 
 ---
 
@@ -1236,7 +1258,9 @@ Everything runs against the container; there is no host-level `hermes` binary.
 | Inspect volume layout | `docker exec -it hermes ls /opt/data` |
 | Run setup wizard | `docker run -it --rm -v hermes_data:/opt/data nousresearch/hermes-agent setup` |
 | Create profile | `docker exec -it hermes hermes profile create backoffice` |
-| Slack manifest | `docker exec hermes hermes slack manifest --agent-view --write` |
+| Deploy the repo to the VPS | `./scripts/deploy.sh` (pull + `up -d` + **restart hermes**) |
+| Slack manifest | Committed at `agents/backoffice/slack-manifest.yaml`; compare with `docker exec hermes hermes slack manifest --agent-view` |
+| Slack tokens / channel checks | `./scripts/slack-preflight.sh discover` / `check` / `verify` |
 | Audit pairings | `docker exec hermes hermes pairing list` |
 | List / create cron | `docker exec hermes hermes cron list` / `… cron add …` |
 | Kanban init / create | `docker exec hermes hermes kanban init` / `… kanban create "task" --tag tag` |

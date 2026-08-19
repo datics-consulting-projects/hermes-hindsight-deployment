@@ -1,0 +1,66 @@
+# Slack app manifest — backoffice
+#
+# NOT MOUNTED. Hermes never reads this file; it is the artifact you paste into
+# api.slack.com/apps → your app → App Manifest. It lives here so the scopes the
+# bot holds are reviewable in "git diff" instead of existing only in Slack's UI,
+# where a widened permission leaves no trace anyone can review.
+#
+# To create the app:   Create New App → From a manifest → paste this.
+# To change scopes:    edit here, commit, paste into the App Manifest tab,
+#                      reinstall the app when Slack asks. No redeploy needed —
+#                      scopes live in Slack, not in the container.
+#
+# Comments are valid YAML and Slack drops them on save; keep them here.
+#
+# SEED THIS AGAINST THE REAL BUILD. Run
+#   ./scripts/slack-preflight.sh discover
+# and diff this file against "hermes slack manifest --agent-view". Hermes may
+# want events this hand-written minimum does not grant — see the note under
+# bot_events.
+
+display_information:
+  name: Backoffice
+  description: Answers questions about how the company runs, and remembers what the team teaches it.
+  background_color: "#2c2d30"
+
+features:
+  bot_user:
+    display_name: backoffice-agent
+    always_online: true
+  app_home:
+    # All three off deliberately. Plan §6.2 resolved DMs as out of scope: a DM
+    # is a second, unmonitored surface where a wrong or poisoned answer has no
+    # witness. The Hermes dashboard already covers private one-to-one use, over
+    # Tailscale, with an audit trail. Revisit after the pilot, with a reason.
+    home_tab_enabled: false
+    messages_tab_enabled: false
+    messages_tab_read_only_enabled: true
+
+oauth_config:
+  scopes:
+    bot:
+      - app_mentions:read   # hear @-mentions
+      - chat:write          # reply
+      - channels:history    # read the channel it was invited to, for thread context
+      # Swap channels:history for groups:history if the pilot channel is private.
+      # No im:* scopes — see app_home above.
+
+settings:
+  event_subscriptions:
+    bot_events:
+      # ONLY app_mention. This is the stronger half of the mention-only control:
+      # Slack never delivers the channel's other messages at all, so it holds
+      # even if the channels.slack config in config.yaml is wrong or ignored.
+      # config.yaml's respondTo is the second layer, not the first.
+      #
+      # If discovery shows Hermes needs message.channels to work, adding it is
+      # a real change in exposure — every message in the channel starts
+      # reaching the agent — not a formality. Decide it explicitly.
+      - app_mention
+  interactivity:
+    # No buttons, modals or shortcuts. Nothing in the agent needs them, and each
+    # one is another unauthenticated-by-default entry point.
+    is_enabled: false
+  org_deploy_enabled: false
+  socket_mode_enabled: true    # outbound WebSocket: no inbound port, no compose change
+  token_rotation_enabled: false

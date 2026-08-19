@@ -14,11 +14,30 @@
 
 services:
   hermes:
-    image: nousresearch/hermes-agent:latest
+    # Upstream image plus the CLI tools the bundled skills expect (`ntn`) —
+    # docker/Dockerfile says why that has to be a build rather than a runtime
+    # install. The build context is ./docker, not ".", on purpose: the repo
+    # root holds agents/<name>/.env, and there is no reason to ship live
+    # credentials into a build context.
+    #
+    # pull_policy: build makes "docker compose up -d" rebuild instead of trying
+    # to pull a tag that exists only on this host. It is near-free (every layer
+    # is cached unless the Dockerfile changed) and it means the deploy script
+    # needs no --build flag to pick up a committed Dockerfile change.
+    #
+    # It does NOT refresh the upstream base — that is deliberate, and matches
+    # the old behaviour where "up -d" never re-pulled :latest either. Upgrading
+    # Hermes is "docker compose build --pull"; see README § Upgrading.
+    build:
+      context: ./docker
+      args:
+        HERMES_IMAGE: nousresearch/hermes-agent:latest
+    image: hermes-agent-stack:latest
+    pull_policy: build
     container_name: hermes
     restart: unless-stopped
     # Runs the DEFAULT profile (/opt/data), deliberately — see README
-    # § "Profiles: the open question". The backoffice persona files below are
+    # § "Profiles". The backoffice persona files below are
     # mounted and ready but the default profile does not read them, so the agent
     # currently runs on whatever is in the volume.
     #

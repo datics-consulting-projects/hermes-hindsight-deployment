@@ -119,24 +119,29 @@ but nobody outside it can.
    ```sh
    docker compose up -d
    docker compose logs -f
-   docker exec hermes hermes profile list
+   docker exec hermes hermes gateway status -p backoffice
    ```
 
-   The gateway runs the **default** profile, not `backoffice` — see
-   [Profiles: the open question](#profiles-the-open-question).
+   The gateway runs the **`backoffice`** profile — `command: gateway run -p
+   backoffice` in the compose file — so the persona files mounted in step 5 are
+   the ones in front of the running agent. Check for a **second** gateway the
+   first time you start after switching profiles; [Profiles](#profiles) explains
+   why one can appear and how to stop it.
 
-7. **Activate the Hindsight memory provider** (one-time; not settable via
-   env var, so this needs to run once against the live container):
+7. **Check the Hindsight memory provider is live:**
 
    ```sh
-   docker exec -it hermes hermes config set memory.provider hindsight
-   docker exec -it hermes hermes memory status
+   docker exec -it hermes hermes memory status -p backoffice
    ```
 
-   These target the **default** profile, which is what the gateway runs today.
-   `config` is per profile, so a named profile needs `-p <name>` — except
-   `backoffice`, whose `config.yaml` is mounted read-only from the repo and
-   already carries this setting.
+   Nothing to activate: `memory.provider: hindsight` is already in
+   `agents/backoffice/config.yaml`, mounted read-only from this repo. The
+   `config set` dance is only needed for profiles whose config lives in the
+   volume — the `default` profile, which the stack no longer runs:
+
+   ```sh
+   docker exec -it hermes hermes config set memory.provider hindsight   # default profile only
+   ```
 
    The `HINDSIGHT_MODE=local_external` and `HINDSIGHT_API_URL` env vars in
    the compose file already point it at the sidecar container, so no further
@@ -145,6 +150,10 @@ but nobody outside it can.
 
 8. **Connect from Hermes Desktop:** add a Remote Gateway connection to
    `http://<TAILSCALE_IP>:9119` with the Basic Auth credentials from `.env`.
+
+9. **Optional — give the agent a Slack channel:** see [Slack](#slack). It needs
+   no port and no compose change, but read [the gate it
+   opens](#the-gate-this-opens) before inviting anyone.
 
 ## Choosing the Hermes chat model
 
@@ -303,7 +312,7 @@ immutable slot 1.
 
 Two consequences of mounting `config.yaml` read-only, both intended:
 
-- **`hermes -p backoffice config set …` fails.** The file in git wins. Edit it
+- **`hermes config set … -p backoffice` fails.** The file in git wins. Edit it
   there, commit, restart.
 - **A Hermes upgrade that migrates the config schema cannot rewrite it.** If a
   version bump ever fails to start, check this first: copy the container's
@@ -312,29 +321,37 @@ Two consequences of mounting `config.yaml` read-only, both intended:
 Seed `config.yaml` from a profile Hermes generated rather than hand-writing it —
 the schema is not fully documented. The file says how.
 
-### Profiles: the open question
+### Profiles
 
-**The gateway currently runs the `default` profile**, so the mounted `backoffice`
-files are staged but not read by the running agent:
-
-```yaml
-command: gateway run          # not "gateway run -p backoffice"
-```
-
-This is deliberate. The goal is several profiles active at once, and how Hermes
-resolves them — one gateway per profile, how the single published dashboard port
-maps to them, whether `-p` on `gateway run` behaves through the container's
-entrypoint — is worth watching on the VPS before the compose file commits to an
-answer. Bring the stack up, create profiles by hand, inspect.
-
-Switching the stack to the mounted persona is a one-word change:
+**The stack runs the `backoffice` profile.** It is set in the compose file, not
+with `profile use`, so which persona is live is visible in git rather than buried
+in the volume:
 
 ```yaml
 command: gateway run -p backoffice
 ```
 
-Until then, treat `agents/backoffice/` as staged configuration, not live
-behaviour. Open questions and what to measure are in
+That is what makes the mounted persona *live* rather than staged:
+`/opt/data/profiles/backoffice/` is `HERMES_HOME` for the running agent, so the
+`SOUL.md`, `config.yaml` and `.env` from this repo are the ones it reads.
+
+**Watch for two gateways after switching profiles.** Creating a profile registers
+an s6-supervised service, and on container start
+`/etc/cont-init.d/02-reconcile-profiles` brings up every profile whose last
+recorded state was `running`. The `default` profile ran before this switch, so
+that state is still on the volume — and two agents serving one dashboard port,
+with two separate session stores, is a confusing failure. Persist `default` as
+stopped, once:
+
+```sh
+docker exec hermes hermes gateway stop                    # no -p: the default profile
+docker exec hermes hermes gateway status -p backoffice    # the one that should be up
+```
+
+**Still open: several personas serving at once.** One gateway per profile is
+straightforward; how the single published port 9119 maps to more than one of them
+is not answered, and that is the thing to establish on the VPS before a second
+persona goes into the compose file. What to measure is in
 [docs/design/persona-delivery.md](docs/design/persona-delivery.md).
 
 ### Profile commands
@@ -344,15 +361,20 @@ docker exec hermes hermes profile list                   # what exists, which is
 docker exec hermes hermes profile show backoffice        # paths and config for one
 docker exec hermes hermes profile create sales --clone   # new persona, cloning current config
 docker exec hermes hermes profile use backoffice         # sticky default for bare commands
-docker exec hermes hermes -p backoffice gateway status   # is this persona's gateway up
-docker exec hermes hermes -p backoffice gateway stop     # disable it without deleting it
+docker exec hermes hermes gateway status -p backoffice   # is this persona's gateway up
+docker exec hermes hermes gateway stop -p backoffice     # disable it without deleting it
 ```
+
+**`-p` goes after the subcommand, never before it.** `hermes -p backoffice
+gateway status` dies in the container entrypoint with `s6-applyuidgid: fatal:
+unable to exec -p`: `docker/main-wrapper.sh` dispatches on `command -v "$1"`, and
+POSIX `sh` reads `command -v -p` as options with no operand, exits 0, and the
+wrapper then tries to execute `-p` as a program. The flag position is load-bearing
+here even though Hermes itself accepts either.
 
 Creating a profile also registers an s6-supervised gateway service inside the
 container and installs a `backoffice …` command alias as shorthand for
-`hermes -p backoffice …`. Which profile the **stack** runs is set declaratively by
-`command: gateway run -p backoffice` in the compose file rather than by
-`profile use`, so it is visible in git instead of buried in the volume.
+`hermes … -p backoffice`.
 
 ### Why the mount is read-only
 
@@ -394,8 +416,8 @@ docker exec -it hermes hermes profile create sales --clone
 
 ```sh
 docker compose up -d
-docker exec -it hermes hermes -p sales gateway start
-docker exec hermes hermes -p sales gateway status      # must actually be running
+docker exec -it hermes hermes gateway start -p sales
+docker exec hermes hermes gateway status -p sales      # must actually be running
 ```
 
 Three rules, each of which fails silently if broken:
@@ -428,28 +450,185 @@ skills there for review. Mounting it `:ro` from this repo would make skills full
 version-controlled at the cost of disabling that loop entirely. That is a real
 decision, not a detail; it is left in the volume until it is made.
 
+### When a skill needs a CLI the image doesn't ship
+
+Some bundled skills drive an external command-line tool and degrade quietly when
+it is absent. The `notion` skill is the worked example: it prefers Notion's `ntn`
+CLI and falls back to raw `curl` against the HTTP API "when `ntn` isn't
+installed" — so a correctly-configured skill still answers `ntn: not found`.
+
+**The agent cannot install it itself, by design.** `/opt/hermes` is root-owned
+and non-writable at runtime, the gateway drops to the unprivileged `hermes` user
+(UID 10000), and the image's runtime extension point
+(`HERMES_LAZY_INSTALL_TARGET` → `/opt/data/lazy-packages`) installs *Python
+packages for Hermes backends* — never CLI binaries. `docker exec -u root hermes
+npm i -g ntn` does work, and is precisely the ad-hoc server state this repo
+exists to avoid: invisible in git, undone by the next image pull, unreproducible
+on a second host.
+
+So the stack builds one layer on top of upstream instead — the whole of
+[docker/Dockerfile](docker/Dockerfile):
+
+```dockerfile
+ARG HERMES_IMAGE=nousresearch/hermes-agent:latest
+FROM ${HERMES_IMAGE}
+ARG NTN_VERSION=0.22.8
+RUN npm install --global "ntn@${NTN_VERSION}" && ntn --version
+ENV NOTION_KEYRING=0
+```
+
+`ntn --version` in the same `RUN` is the build-time proof: a broken install
+fails the build rather than reaching the VPS. The version is pinned so an
+unrelated rebuild cannot swap the agent's tooling underneath it.
+
+The compose service carries `build:` plus `pull_policy: build`, so
+`docker compose up -d` rebuilds from cache (near-free) and no `--build` flag has
+to be remembered. Note the build context is `./docker`, not `.` — the repo root
+holds `agents/*/.env`, and live credentials have no business in a build context.
+Refreshing the upstream base is a separate, deliberate command; see
+[Upgrading](#upgrading).
+
+**The split this preserves is the point.** The image grants the *tool*,
+container-wide. The *credential* stays per agent in `agents/<name>/.env`, which
+is the access boundary. A second persona gets `ntn` and no Notion access at all.
+
+**Two names, one secret**, on the credential side. The skill declares
+`NOTION_API_KEY` as its prerequisite — a real gate, not documentation: Hermes
+turns a missing prerequisite into *"Setup needed before using this skill"* — and
+uses that name in all thirteen of its `curl` examples. But the `ntn` CLI it
+drives reads `NOTION_API_TOKEN`. Set only the key and the failure is quiet in
+the worst way: the skill reports itself correctly configured while `ntn` reports
+`API token is invalid`.
+
+So set both. Hermes loads the profile `.env` with python-dotenv, which
+interpolates `${VAR}`, so the second line references the first rather than
+duplicating the secret and a rotated key changes in one place:
+
+```sh
+NOTION_API_KEY=ntn_...
+NOTION_API_TOKEN=${NOTION_API_KEY}
+```
+
+The alternative — renaming the variable inside the bundled skill during the
+image build — was tried and rejected. It works (`skills_sync` re-copies bundled
+skills into the profile's own `skills/` dir on every gateway start, so a patched
+skill does reach the running agent), but it buys one fewer `.env` line at the
+price of owning a `sed` patch against an upstream file forever. Two documented
+lines beat a vendored-file patch.
+
+One thing that needed checking and turned out to be a non-issue: Hermes strips
+provider credentials from terminal subprocesses, but the blocklist is name-based
+and no `NOTION_*` name is on it, so both reach `ntn` normally — no
+`terminal.env_passthrough` entry in `config.yaml` is required.
+
+## Slack
+
+The agent's second surface: one channel, mention-only, no DMs. Slack uses
+**Socket Mode** — an outbound WebSocket — so nothing about the Tailscale-only
+posture changes and **`docker-compose.yml` is not touched at all**. No port, no
+new environment variable, no inbound anything.
+
+Everything that can live in git does:
+
+| Piece | Where | Why there |
+| --- | --- | --- |
+| Scopes, events, DM settings | `agents/backoffice/slack-manifest.yaml` | Not mounted — Hermes never reads it. It is what you paste into Slack's App Manifest tab, kept in git so a widened permission is a reviewable commit rather than an invisible click. |
+| Channel behaviour, allowlist | `agents/backoffice/config.yaml` | Already mounted `:ro`, so this needs **no `hermes config set` on the server**. Edit, commit, deploy. |
+| The three tokens | `agents/backoffice/.env` (gitignored) | Per-agent, not root `.env`. The compose `environment:` list is container-wide — a second persona would inherit this bot's identity and be able to post as it. |
+
+### Enabling it
+
+Four steps happen in Slack's UI and cannot be automated (`apps.manifest.create`
+exists but wants a configuration token that rotates every 12 hours — not worth a
+rotating secret for one app). Everything else is a script.
+
+```sh
+# 0. Confirm what this Hermes build calls things, then uncomment the
+#    channels.slack block in agents/backoffice/config.yaml.
+./scripts/slack-preflight.sh discover
+```
+
+1. **api.slack.com/apps → Create New App → From a manifest**, paste
+   `agents/backoffice/slack-manifest.yaml`.
+2. **Enable Socket Mode** → generate the app-level token (`xapp-`).
+3. **Install App to Workspace** → copy the bot token (`xoxb-`), and the signing
+   secret from Basic Information.
+4. Paste all three into `agents/backoffice/.env`.
+
+```sh
+./scripts/slack-preflight.sh check     # tokens present, live, Socket Mode really on
+./scripts/deploy.sh                    # pull, up, restart hermes
+./scripts/slack-preflight.sh verify    # config parsed, socket connected, pairings
+```
+
+Then `/invite` the bot to **exactly one** channel. It cannot read channels it
+was not invited to, so the invite is the scope.
+
+### Mention-only, twice over
+
+The manifest subscribes to `app_mention` and nothing else, so Slack never
+delivers the channel's other messages — that control holds even if the config
+block is wrong or ignored. `respondTo: mention` in `config.yaml` is the second
+layer, not the first. Worth keeping in that order, because a misparsed config
+fails *open*.
+
+The test that matters is the silent one: post in the channel **without**
+mentioning the bot and confirm nothing happens.
+
+### The gate this opens
+
+Slack is the first surface where people who are not you put text in front of the
+agent, and Hermes syncs turns to Hindsight after every response — so by default
+anything said in the channel becomes durable memory. The plan gates this behind
+the reader/writer split (§10.1), which is not built. The interim is
+`memory.write_approval: true`, already applied in `agents/backoffice/config.yaml`:
+writes are staged for review instead of landing silently. Keep the channel
+single and the allowlist explicit, and never set `GATEWAY_ALLOW_ALL_USERS=true`.
+Tracked as [G8](docs/issues/gap-register.md).
+
 ## Operating
 
 ```sh
 docker compose logs -f hermes          # gateway + dashboard logs
 docker compose logs -f hindsight       # memory extraction/synthesis logs
-docker exec hermes hermes profile list                 # which personas exist
-docker exec hermes hermes -p default gateway status    # the one the stack runs
-docker exec hermes hermes memory status
+docker exec hermes hermes profile list                     # which personas exist
+docker exec hermes hermes gateway status -p backoffice     # the one the stack runs
+docker exec hermes hermes memory status -p backoffice
 ```
 
-Anything touching `config.yaml`, `.env`, memory or skills is per profile. Bare
-commands hit the default profile — which is the one running today, but will not
-be once `-p backoffice` goes into the compose `command:`. The flag works in any
-position; `hermes profile create` also installs a `<name> …` command alias inside
-the container as a shorthand.
+From your laptop, so the stack is not driven by pasted `docker exec` lines
+(`cp scripts/.env.example scripts/.env` first, and set the host):
+
+```sh
+./scripts/deploy.sh                    # pull + up -d + restart hermes, on the VPS
+./scripts/slack-preflight.sh verify    # what the deployed agent sees of Slack
+```
+
+`deploy.sh` always restarts `hermes`, and that is the point rather than
+belt-and-braces: `docker compose up -d` alone sees no change to the service
+definition and leaves the container running, still holding the **old inodes** of
+`SOUL.md`, `config.yaml` and `.env`.
+
+Anything touching `config.yaml`, `.env`, memory or skills is per profile, so
+almost every command above wants `-p backoffice`. **Bare commands hit `default`,
+which is not the profile the stack runs** — that is the quiet way to spend ten
+minutes reading the wrong profile's memory. `-p` must come *after* the
+subcommand; see [Profile commands](#profile-commands) for why. `hermes profile
+create` also installs a `<name> …` alias inside the container as a shorthand.
 
 ## Upgrading
 
 ```sh
-docker compose pull
+docker compose pull                  # hindsight + postgres
+docker compose build --pull hermes   # hermes: refresh the upstream base image
 docker compose up -d
 ```
+
+`hermes` is built, not pulled ([why](#when-a-skill-needs-a-cli-the-image-doesnt-ship)),
+so `docker compose pull` cannot reach it — `--pull` on the build is what
+re-resolves `nousresearch/hermes-agent:latest`. Two commands rather than one is
+the deliberate cost of that: it also means no routine `up -d` or `deploy.sh` can
+move the agent onto a new Hermes release by accident.
 
 Hermes runs non-interactive config migrations against the mounted volume on
 startup and backs up `config.yaml`/`.env` first if a migration is needed.

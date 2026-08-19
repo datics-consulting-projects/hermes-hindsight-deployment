@@ -34,6 +34,44 @@ model:
 
 memory:
   provider: hindsight
+  # ON before any new input path opens — plan §11.2. Slack IS that new input
+  # path: it is the first surface where people who are not you put text in
+  # front of the agent, and Hermes syncs turns to Hindsight after each
+  # response, so without this gate anything said in the channel becomes
+  # durable memory unreviewed. This is the interim standing in for the §10.1
+  # reader/writer split, which is not built. See gap-register G8.
+  write_approval: true
+
+# --- Slack channel behaviour — PENDING DISCOVERY ---------------------------
+# The scopes live in slack-manifest.yaml; this block is how the agent behaves
+# once connected. Uncomment after running
+#
+#   ./scripts/slack-preflight.sh discover
+#
+# and confirming these are the key names THIS Hermes build actually uses.
+# Guessing is not cheap here: the file is mounted read-only, so a key Hermes
+# rejects cannot be patched with "config set" — it needs an edit, a commit and
+# a restart — and a key it merely IGNORES fails open, leaving the agent
+# answering everyone. The manifest's app_mention-only event subscription is the
+# backstop for precisely that case.
+#
+# If discovery shows no config keys for this, the fallback is the env-var form
+# in plan §6.1 (SLACK_ALLOWED_USERS / SLACK_HOME_CHANNEL) in the per-agent
+# .env — worse, because the allowlist stops being reviewable in git.
+#
+#channels:
+#  slack:
+#    respondTo: mention          # silent unless @-mentioned — plan §6.3
+#    # Exactly one channel for the pilot. The bot cannot read a channel it was
+#    # not invited to, so the /invite is itself the scope.
+#    homeChannel: "#<channel>"
+#    # Explicit member IDs, NEVER GATEWAY_ALLOW_ALL_USERS=true. Here rather
+#    # than in SLACK_ALLOWED_USERS because member IDs are not secret, and in
+#    # git a widened allowlist is a reviewable commit instead of an untracked
+#    # edit on the VPS. Find one: avatar → View full profile → More → Copy
+#    # member ID. Starts with U.
+#    allowedUsers:
+#      - U...
 
 # Removing the execution toolsets rather than sandboxing them — plan §11.2. A
 # Q&A agent has no legitimate shell, disk or browsing use, and everything it
@@ -54,8 +92,7 @@ agent:
 # YAML key, and which one wins is parser-dependent.
 #
 # memory:                        # merge into the live memory: above
-#   memory_enabled: true
-#   write_approval: true         # ON before any new input path opens
+#   memory_enabled: true         # (write_approval is applied above, for Slack)
 #
 # skills:
 #   write_approval: true
