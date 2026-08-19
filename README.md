@@ -19,7 +19,7 @@ Hermes Desktop (laptop) ──Tailscale──▶ hermes:9119 (dashboard backend)
 ```
 
 - Only port **9119** is published, and only on the VPS's Tailscale IP. The
-  Hostinger firewall already blocks all public traffic, but binding the
+  provider's firewall already blocks all public traffic, but binding the
   publish address explicitly means the port isn't reachable even if that
   firewall config ever changes.
 - Hindsight and its Postgres are internal-only — Hermes reaches Hindsight by

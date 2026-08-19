@@ -22,7 +22,7 @@ services:
       # Dashboard backend (port 9119) — this is what Hermes Desktop's
       # "Remote Gateway" connects to. Bound to the Tailscale IP only, so it
       # is never reachable on the public interface (defense in depth on top
-      # of the Hostinger firewall, which already blocks all public traffic).
+      # of the provider's firewall, which already blocks all public traffic).
       #
       # The ":?" guard is load-bearing: with a plain ${TAILSCALE_IP} an empty
       # or missing value silently renders as "9119:9119", which binds every
