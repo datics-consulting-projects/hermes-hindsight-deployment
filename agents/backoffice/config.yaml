@@ -27,12 +27,25 @@ model: openrouter/anthropic/claude-sonnet-4
 memory:
   provider: hindsight
 
-# --- Target guardrail baseline — plan §11.2, NOT YET APPLIED --------------
+# Removing the execution toolsets rather than sandboxing them — plan §11.2. A
+# Q&A agent has no legitimate shell, disk or browsing use, and everything it
+# needs arrives through the memory provider. This is what enforces the limits
+# SOUL.md's "Boundaries" section describes; the persona states them, this
+# applies them.
+agent:
+  disabled_toolsets:
+    - web
+    - terminal
+    - files
+    - browser
+
+# --- Rest of the guardrail baseline — plan §11.2, NOT YET APPLIED ---------
 # Uncomment deliberately, one block at a time, and verify the agent still does
-# what you need. Removing toolsets is the plan's preferred alternative to
-# sandboxing them: a Q&A agent has no legitimate shell use.
+# what you need. The "memory:" and "agent:" blocks below must be MERGED into
+# the live keys above — a second top-level "memory:" or "agent:" is a duplicate
+# YAML key, and which one wins is parser-dependent.
 #
-# memory:
+# memory:                        # merge into the live memory: above
 #   memory_enabled: true
 #   write_approval: true         # ON before any new input path opens
 #
@@ -40,14 +53,9 @@ memory:
 #   write_approval: true
 #   guard_agent_created: true
 #
-# agent:
+# agent:                         # merge into the live agent: above
 #   max_turns: 60
 #   verify_on_stop: false
-#   disabled_toolsets:
-#     - web
-#     - terminal
-#     - files
-#     - browser
 #
 # tool_loop_guardrails:
 #   hard_stop_enabled: true
