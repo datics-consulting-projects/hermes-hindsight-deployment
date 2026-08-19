@@ -1,0 +1,58 @@
+# Hermes profile configuration — backoffice
+#
+# Mounted read-only at /opt/data/profiles/backoffice/config.yaml. Consequences:
+#
+#   - This file is the source of truth. Edit it here, commit, restart.
+#   - "hermes -p backoffice config set ..." WILL FAIL (read-only filesystem).
+#     That is the intended tradeoff: config as code, not config as volume state.
+#   - Hermes runs config migrations on startup and rewrites config.yaml when the
+#     schema changes. Against a read-only mount that migration cannot write.
+#     If a version bump ever fails to start, this is the first thing to check —
+#     copy the container's migrated file back into the repo and commit it.
+#
+# SEED THIS FILE RATHER THAN HAND-WRITING IT. Hermes owns the schema and the
+# full set of defaults is not documented. Before mounting, create the profile
+# and copy out what Hermes itself generated:
+#
+#   docker exec hermes cat /opt/data/profiles/backoffice/config.yaml \
+#     > agents/backoffice/config.yaml
+#
+# then edit down to what you actually want to pin. The keys below are the two
+# the deployment currently relies on (README § "Choosing the Hermes chat model"
+# and setup step 6).
+
+# The agent's own chat model. No env var exists for this — see README.
+model: openrouter/anthropic/claude-sonnet-4
+
+memory:
+  provider: hindsight
+
+# --- Target guardrail baseline — plan §11.2, NOT YET APPLIED --------------
+# Uncomment deliberately, one block at a time, and verify the agent still does
+# what you need. Removing toolsets is the plan's preferred alternative to
+# sandboxing them: a Q&A agent has no legitimate shell use.
+#
+# memory:
+#   memory_enabled: true
+#   write_approval: true         # ON before any new input path opens
+#
+# skills:
+#   write_approval: true
+#   guard_agent_created: true
+#
+# agent:
+#   max_turns: 60
+#   verify_on_stop: false
+#   disabled_toolsets:
+#     - web
+#     - terminal
+#     - files
+#     - browser
+#
+# tool_loop_guardrails:
+#   hard_stop_enabled: true
+#   loop_caps:
+#     max_subagents: 3
+#
+# tool_output:
+#   max_bytes: 30000

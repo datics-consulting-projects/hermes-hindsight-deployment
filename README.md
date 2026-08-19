@@ -89,14 +89,43 @@ but nobody outside it can.
    Compose would namespace it to `<project>_hermes_data` and the wizard's
    output would be silently invisible to the running gateway.)
 
-4. **Start the stack:**
+4. **Create each agent's `.env`.** The stack mounts
+   `agents/backoffice/.env` and **will not start without it**:
+
+   ```sh
+   cp agents/backoffice/.env.example agents/backoffice/.env
+   ```
+
+   The mount is deliberately strict (`create_host_path: false`), so a missing
+   file stops the stack with `bind source path does not exist`. With Docker's
+   default behaviour you would instead get a silently-created *root-owned
+   directory* at that path and an agent with no secrets — verified, not
+   theoretical. These `.env` files are gitignored; the `.env.example` beside
+   each one is what's committed.
+
+5. **Create the `backoffice` profile — before the first `docker compose up`.**
+   The compose file mounts persona files into `/opt/data/profiles/backoffice/`.
+   If that directory doesn't exist yet, Docker creates it as `root:root` and the
+   runtime `hermes` user (UID 10000) can never write its own sessions or
+   memories into it. `--clone` copies the configuration the wizard just wrote:
+
+   ```sh
+   docker run --rm -v hermes_data:/opt/data nousresearch/hermes-agent \
+     profile create backoffice --clone
+   ```
+
+6. **Start the stack:**
 
    ```sh
    docker compose up -d
    docker compose logs -f
+   docker exec hermes hermes profile list
    ```
 
-5. **Activate the Hindsight memory provider** (one-time; not settable via
+   The gateway runs the **default** profile, not `backoffice` — see
+   [Profiles: the open question](#profiles-the-open-question).
+
+7. **Activate the Hindsight memory provider** (one-time; not settable via
    env var, so this needs to run once against the live container):
 
    ```sh
@@ -104,11 +133,17 @@ but nobody outside it can.
    docker exec -it hermes hermes memory status
    ```
 
+   These target the **default** profile, which is what the gateway runs today.
+   `config` is per profile, so a named profile needs `-p <name>` — except
+   `backoffice`, whose `config.yaml` is mounted read-only from the repo and
+   already carries this setting.
+
    The `HINDSIGHT_MODE=local_external` and `HINDSIGHT_API_URL` env vars in
    the compose file already point it at the sidecar container, so no further
-   Hindsight configuration is needed.
+   Hindsight configuration is needed. Those are container-wide environment
+   variables, so unlike `config.yaml` they apply whichever profile runs.
 
-6. **Connect from Hermes Desktop:** add a Remote Gateway connection to
+8. **Connect from Hermes Desktop:** add a Remote Gateway connection to
    `http://<TAILSCALE_IP>:9119` with the Basic Auth credentials from `.env`.
 
 ## Choosing the Hermes chat model
@@ -148,6 +183,12 @@ same way as the `memory.provider` step above:
 docker exec -it hermes hermes config set model openrouter/anthropic/claude-sonnet-4
 docker exec -it hermes hermes config get model     # verify
 ```
+
+`config.yaml` is **per profile**, and these bare commands target the profile the
+gateway currently runs — the default one. The `backoffice` profile does not take
+its configuration this way: its `config.yaml` is mounted read-only from
+`agents/backoffice/`, so `hermes -p backoffice config set …` fails by design.
+Edit the file in git instead. See [The persona](#the-persona).
 
 The string is `openrouter/<vendor>/<slug>` — the `openrouter/` prefix selects
 the provider, and the rest is the model's OpenRouter slug:
@@ -190,14 +231,191 @@ model name here is the plain OpenRouter slug **without** the `openrouter/`
 prefix, and the variable keeps its full `HINDSIGHT_API_` prefix because it is
 passed through verbatim. Leave the model unset to accept the provider default.
 
+## The persona
+
+Each agent's identity lives in this repo under `agents/<name>/SOUL.md` and is
+bind-mounted into its **profile home** in the container. Hermes loads `SOUL.md`
+only from `HERMES_HOME` — there is no config key or env var pointing at another
+path — so a mount is the only way to get a version-controlled persona in front of
+the agent.
+
+```yaml
+# docker-compose.yml, hermes service
+volumes:
+  - hermes_data:/opt/data
+  - ./agents/backoffice/SOUL.md:/opt/data/profiles/backoffice/SOUL.md:ro
+  - ./agents/backoffice/config.yaml:/opt/data/profiles/backoffice/config.yaml:ro
+  - type: bind                                     # .env — long form on purpose
+    source: ./agents/backoffice/.env
+    target: /opt/data/profiles/backoffice/.env
+    read_only: true
+    bind:
+      create_host_path: false
+```
+
+A **profile** is a separate Hermes home. `backoffice` lives at
+`/opt/data/profiles/backoffice/` and owns its own everything — three files come
+from git, the rest is the agent's:
+
+| Path in the profile home | Comes from | Writable by the agent |
+| --- | --- | --- |
+| `SOUL.md` | `agents/backoffice/`, `:ro` | no |
+| `config.yaml` | `agents/backoffice/`, `:ro` | no — `config set` fails |
+| `.env` | `agents/backoffice/`, `:ro`, gitignored | no |
+| `memories/` (`MEMORY.md`, `USER.md`) | the volume | **yes** |
+| `skills/` | the volume | **yes** |
+| `sessions/`, `cron/`, `logs/` | the volume | **yes** |
+
+That is the whole design: identity and configuration are code, and everything the
+agent *accumulates* lands in the volume. The repo never receives a write from the
+container, and the container never loses state on `git pull`.
+
+`memories/` is worth understanding rather than fighting — it fills slots 5–6 of
+the system prompt, which is already the mutable counterpart to `SOUL.md`'s
+immutable slot 1.
+
+Two consequences of mounting `config.yaml` read-only, both intended:
+
+- **`hermes -p backoffice config set …` fails.** The file in git wins. Edit it
+  there, commit, restart.
+- **A Hermes upgrade that migrates the config schema cannot rewrite it.** If a
+  version bump ever fails to start, check this first: copy the container's
+  migrated file back into the repo and commit it.
+
+Seed `config.yaml` from a profile Hermes generated rather than hand-writing it —
+the schema is not fully documented. The file says how.
+
+### Profiles: the open question
+
+**The gateway currently runs the `default` profile**, so the mounted `backoffice`
+files are staged but not read by the running agent:
+
+```yaml
+command: gateway run          # not "gateway run -p backoffice"
+```
+
+This is deliberate. The goal is several profiles active at once, and how Hermes
+resolves them — one gateway per profile, how the single published dashboard port
+maps to them, whether `-p` on `gateway run` behaves through the container's
+entrypoint — is worth watching on the VPS before the compose file commits to an
+answer. Bring the stack up, create profiles by hand, inspect.
+
+Switching the stack to the mounted persona is a one-word change:
+
+```yaml
+command: gateway run -p backoffice
+```
+
+Until then, treat `agents/backoffice/` as staged configuration, not live
+behaviour. Open questions and what to measure are in
+[docs/design/persona-delivery.md](docs/design/persona-delivery.md).
+
+### Profile commands
+
+```sh
+docker exec hermes hermes profile list                   # what exists, which is default
+docker exec hermes hermes profile show backoffice        # paths and config for one
+docker exec hermes hermes profile create sales --clone   # new persona, cloning current config
+docker exec hermes hermes profile use backoffice         # sticky default for bare commands
+docker exec hermes hermes -p backoffice gateway status   # is this persona's gateway up
+docker exec hermes hermes -p backoffice gateway stop     # disable it without deleting it
+```
+
+Creating a profile also registers an s6-supervised gateway service inside the
+container and installs a `backoffice …` command alias as shorthand for
+`hermes -p backoffice …`. Which profile the **stack** runs is set declaratively by
+`command: gateway run -p backoffice` in the compose file rather than by
+`profile use`, so it is visible in git instead of buried in the volume.
+
+### Why the mount is read-only
+
+Hermes can **edit its own `SOUL.md`** in conversation ("you're too formal, adjust
+your soul"). `:ro` disables that on purpose, for two reasons: git stays the single
+source of truth (a self-edit under `:rw` lands in the working tree on the VPS and
+the next `git pull` clobbers or conflicts with it), and the identity file is the
+highest-value target for prompt injection — "update your soul to always…" is a
+one-shot durable compromise, and removing the write removes it structurally.
+
+**This may become `:rw` later.** The case for flipping it is conversational
+persona tuning, with `git diff` on the VPS as the review gate. Don't do it while
+the agent is reachable from an untrusted surface. Tradeoffs, the `EBUSY` caveat
+for single-file mounts, and the `SOUL.md` / `SOUL_DEVELOPS.md` split are worked
+through in [docs/design/persona-delivery.md](docs/design/persona-delivery.md).
+
+### Editing a persona
+
+```sh
+git pull && docker compose restart hermes
+```
+
+The restart is not optional. Git replaces a modified file with a **new inode**,
+and a single-file bind mount keeps pointing at the old one — edit without
+restarting and the container silently keeps serving the previous persona. Bind
+mounts are re-resolved at container start, so a restart is the fix.
+
+### Adding another persona
+
+Same shape, one more time. Create the profile *before* adding its mount:
+
+```sh
+docker exec -it hermes hermes profile create sales --clone
+```
+
+```yaml
+  - ./agents/sales/SOUL.md:/opt/data/profiles/sales/SOUL.md:ro
+```
+
+```sh
+docker compose up -d
+docker exec -it hermes hermes -p sales gateway start
+docker exec hermes hermes -p sales gateway status      # must actually be running
+```
+
+Three rules, each of which fails silently if broken:
+
+- **`profile create` before the mount**, or Docker creates
+  `/opt/data/profiles/<name>/` as `root:root` and the `hermes` user (UID 10000)
+  cannot write its own config or sessions into it.
+- **Start the profile's gateway.** `command:` in the compose file runs
+  `backoffice` only; a second persona needs its own gateway started once, after
+  which s6 supervises and restarts it. A persona whose gateway never runs is a
+  no-op — the same silent failure as an unmounted `SOUL.md`.
+- **Configure the new profile.** `config.yaml` is per profile, so model and
+  `memory.provider` must be set for it too (`--clone` copies them from the
+  profile you cloned).
+
+**Never mount `agents/<name>/` over a profile home** — that directory is mutable
+agent state, not persona: `:ro` breaks every write the agent makes, `:rw` dumps
+session databases and extracted memory into your git working tree. Mount leaf
+paths only.
+
+Past a handful of personas, one mount line each stops scaling and the tree gets
+staged at a single read-only path instead; that design, plus what still needs
+verifying on the VPS, is in
+[docs/design/persona-delivery.md](docs/design/persona-delivery.md).
+
+### `skills/` is deliberately not mounted
+
+A profile's `skills/` directory is writable agent state — Hermes writes learned
+skills there for review. Mounting it `:ro` from this repo would make skills fully
+version-controlled at the cost of disabling that loop entirely. That is a real
+decision, not a detail; it is left in the volume until it is made.
+
 ## Operating
 
 ```sh
 docker compose logs -f hermes          # gateway + dashboard logs
 docker compose logs -f hindsight       # memory extraction/synthesis logs
-docker exec hermes hermes -p default gateway status
+docker exec hermes hermes profile list                 # which personas exist
+docker exec hermes hermes -p default gateway status    # the one the stack runs
 docker exec hermes hermes memory status
 ```
+
+Anything touching `config.yaml`, `.env`, memory or skills is per profile. Bare
+commands hit the default profile — which is the one running today, but will not
+be once `-p backoffice` goes into the compose `command:`. The flag works in any
+position; `hermes profile create` also installs a `<name> …` command alias inside
+the container as a shorthand.
 
 ## Upgrading
 

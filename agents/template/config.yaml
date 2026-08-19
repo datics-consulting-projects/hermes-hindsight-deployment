@@ -1,0 +1,24 @@
+# Hermes profile configuration — TEMPLATE
+#
+# Copy this directory to agents/<agent-name>/, then seed this file from a real
+# profile rather than trusting the keys below to be complete:
+#
+#   docker exec -it hermes hermes profile create <agent-name> --clone
+#   docker exec hermes cat /opt/data/profiles/<agent-name>/config.yaml \
+#     > agents/<agent-name>/config.yaml
+#
+# Do that BEFORE adding the mount to docker-compose.yml. Hermes owns this
+# schema; a hand-written file risks omitting keys it expects, and the failure
+# surfaces as odd runtime behaviour rather than a clean error.
+#
+# Once mounted read-only, this file is the source of truth and
+# "hermes -p <agent-name> config set ..." fails. Edit here, commit, restart.
+
+# The agent's own chat model. No env var exists for this.
+model: <MODEL — e.g. openrouter/anthropic/claude-sonnet-4>
+
+memory:
+  provider: hindsight
+
+# Guardrail baseline for a Q&A agent — plan §11.2. Copy the commented block
+# from agents/backoffice/config.yaml when you are ready to apply it.

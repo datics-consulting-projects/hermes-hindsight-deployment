@@ -46,7 +46,7 @@ Slack lands** — which is why §4, §6 and §10 must be built together rather t
 | Slack | Socket Mode, mention-only | Not built |
 | Capabilities | Terminal, files, web, browser toolsets removed | Not built |
 | Trust boundary | Reader recalls memory; a separate writer writes it | Not built — see §1.4 |
-| Profile | Dedicated `backoffice` profile | Not built — runs on `default` |
+| Profile | Dedicated `backoffice` profile | **Staged** — files mounted; gateway still runs `default` |
 
 ---
 
@@ -73,7 +73,7 @@ Hermes Desktop (laptop) ──Tailscale──▶ hermes:9119   (dashboard backen
 
 | Service | Image | Published | Notes |
 |---|---|---|---|
-| `hermes` | `nousresearch/hermes-agent:latest` | `${TAILSCALE_IP}:9119` only | `command: gateway run`; limits 4 GB / 2.0 CPU |
+| `hermes` | `nousresearch/hermes-agent:latest` | `${TAILSCALE_IP}:9119` only | `command: gateway run` (default profile); limits 4 GB / 2.0 CPU |
 | `hindsight` | `ghcr.io/vectorize-io/hindsight:${HINDSIGHT_VERSION:-latest}` | none | UI on :9999 exists but the `ports:` block is commented out |
 | `hindsight-db` | `pgvector/pgvector:pg${HINDSIGHT_DB_VERSION:-18}` | none | healthcheck gates `hindsight` startup |
 
@@ -91,7 +91,7 @@ Hermes' OpenAI-compatible API server (:8642) is unset and unused. Nothing in thi
 
 - **Memory provider** — Hindsight, wired via `HINDSIGHT_MODE=local_external` and
   `HINDSIGHT_API_URL=http://hindsight:8888`, then activated once against the live container:
-  `docker exec -it hermes hermes config set memory.provider hindsight`.
+  `docker exec -it hermes hermes config set memory.provider hindsight` on the `default` profile.
 - **Two independent LLM paths**, as the design intended:
   - *Hermes chat model* — key via `OPENROUTER_API_KEY` (bare pass-through form, so an unset var
     doesn't shadow the wizard's value); model name via `hermes config set model`, because
@@ -104,7 +104,11 @@ Hermes' OpenAI-compatible API server (:8642) is unset and unused. Nothing in thi
 - **Explicit volume names** — `hermes_data`, `hindsight_pg_data`. Without the `name:` keys Compose
   would namespace them per-project and the setup wizard would write to a different volume than the
   stack mounts.
-- **Profile** — `default`. README operates it as `hermes -p default gateway status`.
+- **Profile** — `default` is what the gateway runs. A `backoffice` profile home is *staged*:
+  `agents/backoffice/{SOUL.md,config.yaml,.env}` are bind-mounted `:ro` into
+  `/opt/data/profiles/backoffice/`, while memories, sessions and skills stay writable in the volume.
+  Nothing reads those files until `command:` gains `-p backoffice`. Deliberate — the multi-profile
+  topology is being established on the VPS first (§9.2, and README § "Profiles: the open question").
 
 ### 1.3 What does not exist yet
 
@@ -112,7 +116,8 @@ Neither predecessor plan is implemented beyond the memory layer. Absent today:
 
 - No Slack app, tokens, or channel wiring. No Slack vars in `.env.example` or the compose file.
 - No Notion sync, no `crm.sqlite`, no `crm-mcp` server.
-- No `backoffice` profile, and no `backoffice-writer` — so **no reader/writer trust boundary**.
+- No `backoffice-writer` profile — so **no reader/writer trust boundary**. (`backoffice` is staged
+  but not running; the *split* does not exist at all.)
 - No cron jobs, no skills, no kanban.
 - No toolset restrictions, no `max_turns`, no `tool_output.max_bytes`, no egress allowlist.
 - No `memory.write_approval`.
@@ -128,11 +133,11 @@ Summary, by actual risk today rather than roadmap position:
 | # | Priority | Gap |
 |---|---|---|
 | G6 | **P1** | Backups documented but not scheduled — `hindsight_pg_data` is the one unregenerable asset |
-| G2 | **P1** | `agents/` never mounted, so `SOUL.md` cannot reach the agent |
-| G3 | **P1** | `agents/backoffice/SOUL.md` is empty |
+| G3 | **P1** | `agents/backoffice/SOUL.md` is empty — and now mounted, so its emptiness is live |
 | G1 | P2 | `NOTION_API_KEY` declared but reaches no container |
 | G5 | P2 | `hermes` and `hindsight` track `:latest`, contradicting the §15 pinning mitigation |
 | G7 | P3 | `hindsight` has no resource limit despite possible in-process embeddings |
+| ~~G2~~ | — | `agents/` never mounted — **fixed 2026-08-19** |
 | ~~G4~~ | — | Stale plan refs in the SOUL template — **fixed 2026-08-19** |
 
 Phase 0 of the roadmap (§13.0) schedules the open items.
@@ -174,7 +179,7 @@ isolation Hermes offers — separate `.env`, separate tool config, separate secr
 
 | Change | Where | Depends on |
 |---|---|---|
-| Add `backoffice` profile, migrate off `default` | `hermes_data` volume | — |
+| Add `backoffice` profile, migrate off `default` | `hermes_data` volume + compose `command:` | Files staged 2026-08-19; the `-p` switch is the remaining step |
 | Add `backoffice-writer` profile | volume + a second `command:` or container | profile above |
 | Add `notion-sync` as a 4th compose service + its own SQLite volume | `docker-compose.yml` | §4 |
 | Ship `crm_mcp.py` into the `hermes` container and register it | image or bind mount | §4 |
@@ -182,8 +187,9 @@ isolation Hermes offers — separate `.env`, separate tool config, separate secr
 | Apply toolset/guardrail config | profile `config.yaml` | §11 |
 
 Note the second gateway is not free in this topology: the compose file runs one `hermes` container
-with `command: gateway run`. A writer needs either a second service off the same image with a
-different profile and its own volume, or an out-of-band script. Decide this before §6 — see §10.1.
+with a single `command: gateway run`. A writer needs either a second service off the
+same image with a different profile, a second gateway started inside the same container, or an
+out-of-band script. Decide this before §6 — see §10.1.
 
 The VPS must fit `hermes` (4 GB / 2 CPU limit), Hindsight (unbounded, possibly in-process
 embeddings), Postgres, and later `notion-sync`. The original 2 vCPU / 8 GB / 60 GB sizing is
@@ -193,8 +199,11 @@ workable but leaves little headroom once G7 is measured.
 
 ## 3. Persona — `SOUL.md`
 
-**Status:** template written (`agents/template/SOUL.md`); `agents/backoffice/SOUL.md` is empty
-and unmounted. See G2 and G3.
+**Status:** template written (`agents/template/SOUL.md`); delivery into the container is wired
+(G2 fixed — `agents/backoffice/SOUL.md` is bind-mounted read-only at
+`/opt/data/profiles/backoffice/SOUL.md`, and the stack runs that profile); the
+file itself is still empty. See G3. Mount mechanics, the read-only decision and the multi-persona
+target layout: [docs/design/persona-delivery.md](../design/persona-delivery.md).
 
 `SOUL.md` is the foundational identity document. It is loaded at the start of every session —
 before any tools, skills, or memory — and occupies slot #1 of the system prompt. Unlike a prompt
@@ -338,9 +347,15 @@ Two mechanisms:
 2. **Cron jobs** (§8) fire on schedule, each as a fresh isolated session with `SOUL.md` reloaded.
 
 The agent holds no state between sessions — it reloads `SOUL.md` from disk each time. So persona
-edits take effect on the next interaction, with no long-running process to restart. **This only
-holds once G2 is fixed**; right now the file the agent reads is inside the volume, not the one in
-`agents/`.
+edits take effect on the next interaction, with no long-running process to restart. The file the
+agent reads is now the one in `agents/` (G2 fixed). Upstream corroborates the reload: `SOUL.md` is
+read at session start, and mid-session writes do not mutate the already-built prompt until a
+rebuild runs — so edits land on the *next* session, never the current one.
+
+**One caveat in this deployment.** A `git pull` swaps the file's inode out from under a single-file
+bind mount, so the deploy step is `git pull && docker compose restart hermes` regardless of reload
+behaviour. The staging-directory layout in
+[docs/design/persona-delivery.md](../design/persona-delivery.md) removes that constraint.
 
 ---
 
@@ -538,7 +553,7 @@ Differences from the predecessor plans, all in the deployment's favour — **do 
 | `docker run` with embedded `pg0` | Compose + dedicated `pgvector/pgvector:pg18` service | Deployed is correct — pg0 was "pilot only" |
 | Bind `127.0.0.1:8888` and `:9999` | Not published at all; internal network only | Deployed is stronger |
 | `HINDSIGHT_API_TENANT_API_KEY`, `HINDSIGHT_CP_*` | Not used | Predecessor vars were for a different mode; ignore them |
-| `hermes -p backoffice memory setup` | `hermes config set memory.provider hindsight` on `default` | Deployed is correct for the current profile |
+| `hermes -p backoffice memory setup` | `hermes config set memory.provider hindsight` on `default` | Deployed is correct for the profile that runs; converges when `-p backoffice` lands |
 
 The healthcheck on `hindsight-db` gating `hindsight` startup is what stops the memory server
 crash-looping on a cold boot. Keep it.
@@ -764,7 +779,9 @@ database, memory store and skill set.
 
 **Per-profile Notion scope requires a per-profile integration or sync database.** Scoping by prompt
 does not satisfy §0. In this topology each profile also needs its own volume or volume subpath —
-budget for that rather than discovering it at week 4.
+budget for that rather than discovering it at week 4. The mount layout that keeps version-controlled
+personas and per-profile writable state apart is designed in
+[docs/design/persona-delivery.md](../design/persona-delivery.md) §4.
 
 ### 9.3 Kanban coordination
 
@@ -941,15 +958,18 @@ effect":
 | What | Where | How |
 |---|---|---|
 | Secrets (API keys, tokens) | `.env` on the host → compose `environment:` | Bare pass-through form |
-| Model name, memory provider, guardrails | `config.yaml` inside `hermes_data` (`/opt/data`) | `docker exec … hermes config set …` |
-| Persona | `SOUL.md` inside the volume | Currently unreachable from `agents/` — G2 |
+| Model name, memory provider, guardrails | `config.yaml` per profile. `default`: in the volume. `backoffice`: **`agents/backoffice/config.yaml`, mounted `:ro`** | `default` via `docker exec … hermes config set …`; `backoffice` by editing the repo file — `config set` fails against a read-only mount |
+| Persona | `SOUL.md` in `agents/<name>/`, bind-mounted into `HERMES_HOME` | Edit in git → `docker compose restart hermes` |
 
 **There is no env var for the model name.** That is a Hermes property, not an oversight in the
 compose file.
 
 ### 11.2 Target baseline
 
-Apply to the `backoffice` profile once it exists; until then, to `default`.
+Apply by editing `agents/backoffice/config.yaml` — the profile's config is mounted read-only from
+the repo, so `hermes -p backoffice config set …` fails by design. The commented block at the bottom
+of that file is this baseline, ready to uncomment. It takes effect when the gateway switches to
+`-p backoffice`.
 
 ```yaml
 memory:
@@ -1053,7 +1073,6 @@ Detail and verification steps for each in
 | Item | Work | Time |
 |---|---|---|
 | G6 | Schedule the two documented backups offsite; **test a restore** | 0.5 d |
-| G2 | Mount or deploy `agents/` into the container; verify the agent reads it | 0.5 d |
 | G3 | Write `agents/backoffice/SOUL.md` from the template | 0.5 d |
 | G1 | Plumb or remove `NOTION_API_KEY` — decide §4.4 vs §4.2 first | 0.25 d |
 | G5 | Pin `hermes` and `hindsight` image tags | 0.25 d |
@@ -1066,7 +1085,7 @@ Detail and verification steps for each in
 
 | Step | Work | Time |
 |---|---|---|
-| 1 | `backoffice` profile; migrate config off `default` | 0.5 d |
+| 1 | `backoffice` profile; switch `command:` to `-p backoffice` (files already staged) | 0.25 d |
 | 2 | Notion integration scoping + sync service + two-table schema + screen/quarantine | 2 d |
 | 3 | `crm-mcp`, four tools, spotlight markers, tested standalone | 1 d |
 | 4 | **Reader/writer split; §14 boundary tests green** | 1 d |
@@ -1159,7 +1178,7 @@ the injection test failing costs you one wrong answer instead of a corrupted kno
 | **Prompt injection** steering a single answer | Typed/untrusted table split (§4.2.2), notes behind an opt-in tool, spotlighting, no execution toolsets, egress allowlist, per-call record cap | Bounded once built. Worst case is one wrong answer a human is reading. Model-dependent (§10.1) |
 | **Interim Notion skill (§4.4) bypasses the sync boundary** | Time-box it; never carry it into a Slack-facing deployment | Real. Free-text Notion content reaches the agent unscreened on that path |
 | `NOTION_API_KEY` looks configured but is not (G1) | Plumb it or delete it | Documentation risk: someone assumes Notion works and ships on that belief |
-| Persona not actually loaded (G2, G3) | Mount `agents/`, fill the file | The agent currently runs on defaults regardless of what `agents/` contains |
+| Persona not actually loaded (G3) | Mount wired (G2 fixed); fill the file | The agent still runs on defaults — and the live mount now serves an *empty* `SOUL.md`, shadowing the volume's copy |
 | Who can write to Notion in the first place | Restrict edit rights; audit any integration or form writing into it | Often the actual entry point. Check before hardening downstream |
 | Quarantine queue becomes a rubber stamp | Keep it small by syncing typed fields only; alert on age, not just size | Human review decays under volume. A big queue means the schema is wrong |
 | Everything on the surface is shared | By design, stated in `SOUL.md`, single-tier scoping (§0) | The team must know the bot is listening. Announce it |
@@ -1209,6 +1228,7 @@ Everything runs against the container; there is no host-level `hermes` binary.
 | Logs | `docker compose logs -f hermes` / `… -f hindsight` |
 | Gateway status | `docker exec hermes hermes -p default gateway status` |
 | Memory status | `docker exec hermes hermes memory status` |
+| List / inspect personas | `docker exec hermes hermes profile list` · `… profile show backoffice` |
 | Set memory provider | `docker exec -it hermes hermes config set memory.provider hindsight` |
 | Set chat model | `docker exec -it hermes hermes config set model openrouter/anthropic/claude-sonnet-4` |
 | Verify model | `docker exec -it hermes hermes config get model` |
@@ -1251,8 +1271,8 @@ Positions taken above; recorded here so the choices stay visible.
 | Hindsight storage | `docker run` + embedded `pg0` | Dedicated `pgvector/pgvector:pg18` + healthcheck | **Repo.** pg0 was explicitly pilot-only |
 | Hindsight exposure | Bind `127.0.0.1:8888` / `:9999` | Not published at all; internal network | **Repo — stronger.** Do not add published ports |
 | Hindsight env | `HINDSIGHT_API_TENANT_API_KEY`, `HINDSIGHT_CP_*` | `_LLM_PROVIDER` / `_LLM_API_KEY` / `_LLM_MODEL` / `_DATABASE_URL` / `_WORKER_ID` | **Repo.** The predecessor vars were for a different mode |
-| Memory activation | `hermes -p backoffice memory setup` | `hermes config set memory.provider hindsight` on `default` | **Repo** until the profile exists (13.1 step 1) |
-| Config paths | `~/.hermes/profiles/<name>/config.yaml` | Inside `hermes_data` at `/opt/data` | **Repo.** Verify the layout before scripting (§11.2) |
+| Memory activation | `hermes -p backoffice memory setup` | `hermes config set memory.provider hindsight` on `default` | **Repo** until the gateway switches to `-p backoffice` (13.1 step 1) |
+| Config paths | `~/.hermes/profiles/<name>/config.yaml` | `hermes_data` at `/opt/data/profiles/<name>/` | **Both** — same shape, different root. Verify on the VPS before scripting (§11.2) |
 | Secrets | Per-profile `.env`, `chmod 600` | Host `.env` → compose `environment:`, bare pass-through | **Repo.** Follow the existing convention (§6.1) |
 | Remote access | Not addressed | Tailscale-only :9119 + Basic Auth, `:?` guard | **Repo.** A capability neither plan had; §0's constraint is met by it today |
 | Sandboxing | v1 wanted `terminal.backend: docker` | Whole agent already containerised, volume-scoped | **Repo.** Combined with §11.2 there is nothing left to sandbox |

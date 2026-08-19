@@ -11,11 +11,11 @@ Priority reflects *actual risk today*, not position in the roadmap.
 | # | Priority | Gap | Status |
 |---|---|---|---|
 | [G6](#g6--backups-documented-but-not-scheduled) | **P1** | Backups documented but not scheduled | Open |
-| [G2](#g2--agents-is-never-mounted-into-any-container) | **P1** | `agents/` never mounted into any container | Open |
 | [G3](#g3--agentsbackofficesoulmd-is-empty) | **P1** | `agents/backoffice/SOUL.md` is empty | Open |
 | [G1](#g1--notion_api_key-is-declared-but-reaches-no-container) | P2 | `NOTION_API_KEY` declared but reaches no container | Open |
 | [G5](#g5--images-track-latest) | P2 | Images track `:latest` | Open |
 | [G7](#g7--hindsight-has-no-resource-limit) | P3 | Hindsight has no resource limit | Open |
+| [G2](#g2--agents-is-never-mounted-into-any-container) | — | `agents/` never mounted into any container | **Fixed 2026-08-19** |
 | [G4](#g4--stale-plan-section-references-in-the-soul-template) | — | Stale plan refs in SOUL template | **Fixed 2026-08-19** |
 
 ---
@@ -45,44 +45,86 @@ are recalled. This is also an acceptance test in plan §14.
 
 ## G2 — `agents/` is never mounted into any container
 
-**Priority:** P1 — silently disables the persona layer.
+**Status: Fixed 2026-08-19.**
 
-The `hermes` service mounts only `hermes_data:/opt/data`. Nothing bind-mounts or copies `agents/`,
-so the `SOUL.md` files in this repo **cannot reach the running agent**. Editing them has no effect,
-which makes the version-controlled persona a fiction: the agent runs on whatever is inside the
-volume.
+The `hermes` service mounted only `hermes_data:/opt/data`. Nothing bind-mounted or copied
+`agents/`, so the `SOUL.md` files in this repo **could not reach the running agent**. Editing them
+had no effect, which made the version-controlled persona a fiction: the agent ran on whatever was
+inside the volume. It also broke the property plan §3.5 relies on — "persona edits take effect on
+the next interaction" was only true for the copy inside the volume.
 
-This also breaks the property plan §3.5 relies on — "persona edits take effect on the next
-interaction" is only true for the copy inside the volume.
+**Fix applied.** Hermes loads `SOUL.md` only from `HERMES_HOME` — there is no config key or env var
+pointing elsewhere, so a mount is the only mechanism. `docker-compose.yml` now carries:
 
-**Evidence:**
-
-```sh
-grep -c agents docker-compose.yml   # → 0
+```yaml
+command: gateway run -p backoffice
+volumes:
+  - hermes_data:/opt/data
+  - ./agents/backoffice/SOUL.md:/opt/data/profiles/backoffice/SOUL.md:ro
 ```
 
-**Fix:** bind-mount the persona into the profile path inside `/opt/data`, or add an explicit deploy
-step that copies it in. **Confirm the real path first** — do not assume
-`~/.hermes/profiles/<name>/`, which was the predecessor plans' host-install layout, not this
-container's:
+`config.yaml` and `.env` are mounted the same way, so identity *and* configuration are code, while
+`memories/`, `sessions/` and `skills/` stay read-write in the volume under
+`/opt/data/profiles/backoffice/`. Documented in README § "The persona"; the full design is in
+[docs/design/persona-delivery.md](../design/persona-delivery.md).
+
+The `.env` mount uses the long form with `create_host_path: false` deliberately. Verified
+behaviour: with the short `src:dst:ro` syntax a **missing** source file makes Docker create a
+root-owned *directory* at that path and start the container anyway — the agent silently gets no
+secrets. The long form fails with `bind source path does not exist` instead, matching the
+`${TAILSCALE_IP:?}` guard's philosophy.
+
+**Three constraints found while fixing it**, all recorded in the README and the compose comments:
+
+- **Create the profile before adding its mount.** Otherwise Docker creates
+  `/opt/data/profiles/<name>/` as `root:root` and the runtime `hermes` user (UID 10000) cannot
+  write its own `config.yaml` and sessions into it.
+- **Never mount `agents/<name>/` over a profile home.** A profile home is mutable agent state —
+  sessions, memories, learned skills — not persona. Mount leaf paths only.
+- **`git pull` breaks a single-file bind mount.** Git replaces a modified file with a new inode and
+  the mount keeps pointing at the old one, so persona edits must be followed by
+  `docker compose restart hermes`. If the mount count grows past a handful, switch to
+  `- ./agents:/opt/data/agents:ro` plus a symlink per profile — directory mounts are immune to this.
+
+**Two residuals. The persona is not live yet.**
+
+1. **The gateway runs the `default` profile** (`command: gateway run`), so nothing reads
+   `/opt/data/profiles/backoffice/`. The mount is correct and proven; it is simply not pointed at
+   by the running agent. This is a deliberate staging state while the multi-profile topology is
+   established on the VPS — see README § "Profiles: the open question" — **not** a silent
+   regression, but the observable symptom is the same as G2's: edits to `agents/` change nothing.
+   Closes with one word in the compose `command:`.
+2. **`agents/backoffice/SOUL.md` is still empty (G3).** Once the `-p` switch lands, an empty file
+   would shadow the profile's own `SOUL.md`. **Close G3 before flipping the switch.**
+
+**Verify** (not yet run — no Hermes container on the dev machine):
 
 ```sh
-docker exec -it hermes ls /opt/data
+docker exec -it hermes ls /opt/data                               # confirm the layout on the VPS
+docker exec hermes hermes profile list                            # backoffice present?
+docker exec hermes ls -la /opt/data/profiles/backoffice           # UID 10000, not root?
+docker exec hermes head -5 /opt/data/profiles/backoffice/SOUL.md  # matches the repo file?
 ```
 
-**Verify:** change a distinctive line in `SOUL.md`, restart, and confirm the agent's behaviour
-reflects it.
+The delivery half is verifiable now. The *effect* — a distinctive line in `SOUL.md` changing the
+agent's behaviour in a new session — cannot be until the gateway runs `-p backoffice`.
 
-**Related:** G3 (the file is empty), plan §3, §11.1.
+**Related:** G3 (the file is empty), plan §3, §11.1,
+[docs/design/persona-delivery.md](../design/persona-delivery.md) — which carries the read-only
+decision, the `SOUL.md` / `SOUL_DEVELOPS.md` question, and the multi-persona target layout.
 
 ---
 
 ## G3 — `agents/backoffice/SOUL.md` is empty
 
-**Priority:** P1 — cheapest high-value item in the plan.
+**Priority:** P1 — cheapest high-value item in the plan, and now the only thing standing between
+the repo and a working persona.
 
 The file exists at 0 bytes. The persona described in plan §3 does not exist anywhere; the agent
-runs on Hermes defaults.
+runs on Hermes defaults. Since G2 closed, this file **is** mounted at
+`/opt/data/profiles/backoffice/SOUL.md`, so its
+emptiness now actively shadows whatever the setup wizard wrote into the volume rather than merely
+being ignored.
 
 **Evidence:**
 
@@ -95,12 +137,14 @@ filling it:
 
 - **Omit the "What you remember" section** if and when the reader/writer split (plan §10.1) lands —
   under that split the reader holds recall only, and the retention rules belong to the writer.
-  Today there is no split, so the single `default` profile legitimately carries both.
+  Today there is no split, so the single `backoffice` profile legitimately carries both.
 - **Omit the "Untrusted content" section** until some tool actually emits `<untrusted_content>`
   markers. The template says so itself: teaching the agent to expect markers it will never see is
   worse than omitting the section.
 
-**Verify:** G2 must be closed first, or this file still won't load.
+**Verify:** the delivery path is in place (G2), so it is a straight check —
+`docker exec hermes head -5 /opt/data/profiles/backoffice/SOUL.md` after
+`git pull && docker compose restart hermes` must show what you wrote.
 
 ---
 
@@ -108,9 +152,14 @@ filling it:
 
 **Priority:** P2 — nothing breaks, but the repo misrepresents its own state.
 
-`.env.example` declares `NOTION_API_KEY`, and the README says nothing to contradict it. No service
-in `docker-compose.yml` receives the variable, so Notion is **not wired up**. Anyone reading the
-repo would reasonably conclude otherwise and could plan work on that belief.
+*Originally:* the root `.env.example` declared `NOTION_API_KEY` while no service received it, so
+the repo implied a Notion capability it did not have.
+
+*As of 2026-08-19:* the key has been **moved out of the root `.env.example`** into
+`agents/<name>/.env.example`, where it sits commented out with a note that nothing consumes it yet.
+The delivery path exists (per-profile `.env`, mounted `:ro`); the consumer does not. The repo no
+longer claims a capability it lacks, so what remains is the actual Notion work in plan §4 rather
+than a documentation defect.
 
 **Evidence:**
 
@@ -133,7 +182,7 @@ the agent holds no Notion credential at all.
 | Option | When | Action |
 |---|---|---|
 | **A — remove** | Notion work is not imminent | Delete the key from root `.env.example`. Re-add it under the design that actually lands. Leaves no false signal. |
-| **B — per-agent env** | Following the annotation now | Create `agents/<agent-type>/.env.example`, establish how those files reach the container (depends on G2), and plumb the variable through. |
+| **B — per-agent env** | **Chosen, in progress 2026-08-19** | `agents/<name>/.env.example` exists and is mounted read-only into each profile home; the real `.env` is gitignored. The key is **commented out** there, because nothing consumes it yet — uncommenting it is the remaining step, and belongs with §4, not before it. |
 | **C — plumb as-is** | Running the interim spike in plan §4.4 | Add `- NOTION_API_KEY` (bare form) to the `hermes` service. **Time-box it.** On this path the agent holds a Notion credential directly and free-text Notion content reaches it unscreened — acceptable only while the surface stays Tailscale-only, never once Slack lands. |
 
 **Do not leave it dangling.** Whichever option, the repo should not claim a capability it lacks.

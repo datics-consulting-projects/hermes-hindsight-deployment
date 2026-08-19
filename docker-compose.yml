@@ -17,6 +17,15 @@ services:
     image: nousresearch/hermes-agent:latest
     container_name: hermes
     restart: unless-stopped
+    # Runs the DEFAULT profile (/opt/data), deliberately — see README
+    # § "Profiles: the open question". The backoffice persona files below are
+    # mounted and ready but the default profile does not read them, so the agent
+    # currently runs on whatever is in the volume.
+    #
+    # This is a staging state for the VPS experiment: bring the stack up, create
+    # profiles by hand, and watch how Hermes actually resolves them before
+    # committing the compose file to one. Add "-p backoffice" here to switch the
+    # gateway to the mounted persona; that is the only change required.
     command: gateway run
     ports:
       # Dashboard backend (port 9119) — this is what Hermes Desktop's
@@ -51,6 +60,57 @@ services:
       - OPENROUTER_API_KEY
     volumes:
       - hermes_data:/opt/data
+      # Persona, version-controlled in this repo instead of buried in the
+      # volume. /opt/data is HERMES_HOME, and Hermes loads SOUL.md *only* from
+      # HERMES_HOME — there is no config key or env var pointing elsewhere — so
+      # a mount is the only way in. Docker applies nested mounts after their
+      # parent, so this lands on top of the volume.
+      #
+      # Only the identity file comes from git. Everything else in the profile
+      # home — memories/, skills/, sessions/, cron/, config.yaml, .env — is
+      # written by the agent at runtime and stays read-write in the volume.
+      # That split is the whole point: never mount agents/<name>/ over a profile
+      # home, because :ro would break every write the agent makes and :rw would
+      # dump session databases and extracted memory into the git working tree.
+      # Mount leaves only.
+      #
+      # ORDER MATTERS. Run "profile create backoffice" (README step 4) before
+      # this mount ever exists, or Docker creates /opt/data/profiles/backoffice/
+      # as root:root and the hermes user (UID 10000) cannot write its own
+      # config.yaml and sessions into it.
+      #
+      # Read-only is a deliberate tradeoff, not caution: Hermes can edit its own
+      # SOUL.md in conversation, and :ro disables that so git stays the source
+      # of truth and injection cannot rewrite the agent's identity. It may
+      # become :rw once there is a review gate for what the agent writes back.
+      #
+      # Note git replaces a modified file with a *new inode*, which a
+      # single-file bind mount does not follow: after "git pull", run
+      # "docker compose restart hermes" to re-resolve it.
+      #
+      # Second persona, and the "./agents:/opt/data/agents:ro" staging layout
+      # that scales past one mount line per persona:
+      # docs/design/persona-delivery.md.
+      - ./agents/backoffice/SOUL.md:/opt/data/profiles/backoffice/SOUL.md:ro
+      # Config as code. Mounting this read-only means "hermes -p backoffice
+      # config set ..." fails and the file in git wins — which is the point, but
+      # it also means a Hermes upgrade that migrates the config schema cannot
+      # rewrite it. Seed the file from a real profile rather than hand-writing
+      # it; agents/backoffice/config.yaml says how.
+      - ./agents/backoffice/config.yaml:/opt/data/profiles/backoffice/config.yaml:ro
+      # Per-agent secrets, gitignored. Long form on purpose: with the short
+      # "src:dst:ro" syntax, a missing .env makes Docker silently create a
+      # ROOT-OWNED DIRECTORY at that path and start anyway, leaving the agent
+      # with no secrets and the repo with a stray directory. create_host_path:
+      # false turns that into "bind source path does not exist" and the stack
+      # refuses to start — the same deliberate loud failure as ${TAILSCALE_IP:?}.
+      # Run "cp agents/backoffice/.env.example agents/backoffice/.env" first.
+      - type: bind
+        source: ./agents/backoffice/.env
+        target: /opt/data/profiles/backoffice/.env
+        read_only: true
+        bind:
+          create_host_path: false
     networks:
       - hermes-net
     depends_on:
