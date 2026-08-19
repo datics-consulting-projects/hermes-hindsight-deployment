@@ -12,10 +12,18 @@
 # surfaces as odd runtime behaviour rather than a clean error.
 #
 # Once mounted read-only, this file is the source of truth and
-# "hermes -p <agent-name> config set ..." fails. Edit here, commit, restart.
+# "hermes config set ... -p <agent-name>" fails. Edit here, commit, restart.
 
 # The agent's own chat model. No env var exists for this.
-model: <MODEL — e.g. openrouter/anthropic/claude-sonnet-4>
+#
+# MUST be the mapping form. A scalar "model: openrouter/vendor/slug" is
+# normalized to {default: "<the whole string>"} with NO provider, so the
+# "openrouter/" prefix is never stripped and goes out as the model id — the API
+# answers "... is not a valid model ID" (HTTP 400) on the first chat turn only.
+# "default" holds the provider's own bare slug; "provider" does the routing.
+model:
+  default: <SLUG — e.g. anthropic/claude-sonnet-4>
+  provider: openrouter
 
 memory:
   provider: hindsight

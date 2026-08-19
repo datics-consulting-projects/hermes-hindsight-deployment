@@ -22,7 +22,15 @@
 # and setup step 6).
 
 # The agent's own chat model. No env var exists for this — see README.
-model: "openrouter/nvidia/nemotron-3.5-lightning:free"
+#
+# MUST be the mapping form. A scalar "model: openrouter/vendor/slug" is
+# normalized to {default: "<the whole string>"} with NO provider, so the
+# "openrouter/" prefix is never stripped and goes out as the model id —
+# OpenRouter answers "... is not a valid model ID" (HTTP 400). The provider
+# is a separate key; "default" holds the bare OpenRouter slug.
+model:
+  default: "nvidia/nemotron-3.5-lightning:free"
+  provider: openrouter
 
 memory:
   provider: hindsight

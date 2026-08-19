@@ -180,26 +180,53 @@ the `hermes` service.
 same way as the `memory.provider` step above:
 
 ```sh
-docker exec -it hermes hermes config set model openrouter/anthropic/claude-sonnet-4
+docker exec -it hermes hermes config set model.default anthropic/claude-sonnet-4
+docker exec -it hermes hermes config set model.provider openrouter
 docker exec -it hermes hermes config get model     # verify
 ```
 
-`config.yaml` is **per profile**, and these bare commands target the profile the
-gateway currently runs — the default one. The `backoffice` profile does not take
-its configuration this way: its `config.yaml` is mounted read-only from
-`agents/backoffice/`, so `hermes -p backoffice config set …` fails by design.
-Edit the file in git instead. See [The persona](#the-persona).
+**Two keys, not one — `model` is a mapping, not a string.** `model.default`
+holds the provider's own bare slug; `model.provider` says how to route it.
+Setting them this way also fills in `model.base_url` automatically:
 
-The string is `openrouter/<vendor>/<slug>` — the `openrouter/` prefix selects
-the provider, and the rest is the model's OpenRouter slug:
+```yaml
+model:
+  default: anthropic/claude-sonnet-4
+  provider: openrouter
+  base_url: https://openrouter.ai/api/v1
+```
+
+> **Do not write the provider into the model string.** `hermes config set model
+> openrouter/anthropic/claude-sonnet-4` is accepted, prints `✓ Set model = …`,
+> and is **broken**: a scalar `model:` is normalized to `{default: "<the whole
+> string>"}` with no provider, so the `openrouter/` prefix is never stripped and
+> goes out to the API as part of the model id. OpenRouter replies `HTTP 400:
+> openrouter/anthropic/claude-sonnet-4 is not a valid model ID`, and only on the
+> first chat turn — nothing complains at config time. Verified against
+> `nousresearch/hermes-agent:latest` (Aug 2026).
+>
+> Hermes' own provider-prefix syntax uses a **colon**, not a slash
+> (`openrouter:anthropic/claude-sonnet-4`), and that is a `/model` runtime
+> switch — not the config file's shape.
+
+`config.yaml` is **per profile**, and these bare commands target the profile the
+gateway currently runs. The `backoffice` profile does not take its configuration
+this way: its `config.yaml` is mounted read-only from `agents/backoffice/`, so
+`hermes config set … -p backoffice` fails by design. Edit the file in git
+instead. See [The persona](#the-persona).
+
+`model.default` is the plain OpenRouter slug — what appears in their catalogue,
+with no `openrouter/` in front:
 
 | Example | Meaning |
 | --- | --- |
-| `openrouter/anthropic/claude-sonnet-4` | pinned Anthropic model via OpenRouter |
-| `openrouter/google/gemini-2.5-flash` | cheap/fast option |
-| `openrouter/~anthropic/claude-sonnet-latest` | `~` prefix = always latest revision |
+| `anthropic/claude-sonnet-4` | pinned Anthropic model via OpenRouter |
+| `google/gemini-2.5-flash` | cheap/fast option |
+| `~anthropic/claude-sonnet-latest` | `~` prefix = always latest revision |
 
-Suffixes work too: `:nitro` sorts routing by throughput, `:floor` by price.
+Suffixes work too: `:free` selects a free tier, `:nitro` sorts routing by
+throughput, `:floor` by price. Check a slug against
+<https://openrouter.ai/api/v1/models> before pinning it.
 
 You can also do both steps interactively, which lists the provider's
 available models:

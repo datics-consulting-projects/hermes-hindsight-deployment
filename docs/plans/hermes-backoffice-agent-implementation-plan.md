@@ -1230,7 +1230,7 @@ Everything runs against the container; there is no host-level `hermes` binary.
 | Memory status | `docker exec hermes hermes memory status` |
 | List / inspect personas | `docker exec hermes hermes profile list` · `… profile show backoffice` |
 | Set memory provider | `docker exec -it hermes hermes config set memory.provider hindsight` |
-| Set chat model | `docker exec -it hermes hermes config set model openrouter/anthropic/claude-sonnet-4` |
+| Set chat model | `docker exec -it hermes hermes config set model.default anthropic/claude-sonnet-4` + `… config set model.provider openrouter` (two keys — a scalar `model: openrouter/…` is silently broken) |
 | Verify model | `docker exec -it hermes hermes config get model` |
 | Pick model interactively | `docker exec -it hermes hermes model` |
 | Inspect volume layout | `docker exec -it hermes ls /opt/data` |
