@@ -1,6 +1,6 @@
 # Gap Register
 
-Concrete defects found in this repository, verified against the files as of 2026-08-19.
+Concrete defects found in this repository, verified against the files as of 2026-08-20.
 
 These are **actionable now** and independent of the phased roadmap in
 [the implementation plan](../plans/hermes-backoffice-agent-implementation-plan.md). Closing them
@@ -15,12 +15,12 @@ Priority reflects *actual risk today*, not position in the roadmap.
 | # | Priority | Gap | Status |
 |---|---|---|---|
 | [G6](#g6--backups-documented-but-not-scheduled) | **P1** | Backups documented but not scheduled | Open |
-| [G3](#g3--agentsbackofficesoulmd-is-empty) | **P1** | `agents/backoffice/SOUL.md` is empty | Open |
 | [G8](#g8--slack-opens-before-the-readerwriter-split) | P2 | Slack opens before the reader/writer split (§10.1) | Open — mitigated |
-| [G1](#g1--notion_api_key-is-declared-but-reaches-no-container) | P2 | `NOTION_API_KEY` declared but reaches no container | Open |
-| [G5](#g5--images-track-latest) | P2 | Images track `:latest` | Open |
+| [G5](#g5--images-track-latest) | P2 | Images track `:latest` — unpinned and unrecorded | Open — **restated 2026-08-20** |
 | [G7](#g7--hindsight-has-no-resource-limit) | P3 | Hindsight has no resource limit | Open |
+| [G1](#g1--notion_api_key-is-declared-but-reaches-no-container) | — | `NOTION_API_KEY` declared but reaches no container | **Fixed 2026-08-20** |
 | [G2](#g2--agents-is-never-mounted-into-any-container) | — | `agents/` never mounted into any container | **Fixed 2026-08-19** |
+| [G3](#g3--agentsbackofficesoulmd-is-empty) | — | `agents/backoffice/SOUL.md` is empty | **Fixed 2026-08-20** |
 | [G4](#g4--stale-plan-section-references-in-the-soul-template) | — | Stale plan refs in SOUL template | **Fixed 2026-08-19** |
 
 ---
@@ -91,16 +91,17 @@ secrets. The long form fails with `bind source path does not exist` instead, mat
   `docker compose restart hermes`. If the mount count grows past a handful, switch to
   `- ./agents:/opt/data/agents:ro` plus a symlink per profile — directory mounts are immune to this.
 
-**Two residuals. The persona is not live yet.**
+**Both residuals closed 2026-08-20. The persona is live.**
 
-1. **The gateway runs the `default` profile** (`command: gateway run`), so nothing reads
-   `/opt/data/profiles/backoffice/`. The mount is correct and proven; it is simply not pointed at
-   by the running agent. This is a deliberate staging state while the multi-profile topology is
-   established on the VPS — see README § "Profiles" — **not** a silent
-   regression, but the observable symptom is the same as G2's: edits to `agents/` change nothing.
-   Closes with one word in the compose `command:`.
-2. **`agents/backoffice/SOUL.md` is still empty (G3).** Once the `-p` switch lands, an empty file
-   would shadow the profile's own `SOUL.md`. **Close G3 before flipping the switch.**
+1. **The gateway now runs the `backoffice` profile.** `docker-compose.yml` carries
+   `command: gateway run -p backoffice`, so `/opt/data/profiles/backoffice/` is what the running
+   agent reads and the mounts above are load-bearing rather than staged. The one word landed.
+2. **`agents/backoffice/SOUL.md` is filled** — 2953 bytes (G3), and filled *before* the `-p` switch
+   flipped, which was the ordering constraint this residual existed to enforce.
+
+The staging state that produced them is worth keeping in mind as the failure mode: a gateway
+running `default` reads none of these mounts, starts normally, and answers normally — the only
+symptom is that persona edits do nothing. If that recurs, check the profile before the mounts.
 
 **Verify** (not yet run — no Hermes container on the dev machine):
 
@@ -111,8 +112,9 @@ docker exec hermes ls -la /opt/data/profiles/backoffice           # UID 10000, n
 docker exec hermes head -5 /opt/data/profiles/backoffice/SOUL.md  # matches the repo file?
 ```
 
-The delivery half is verifiable now. The *effect* — a distinctive line in `SOUL.md` changing the
-agent's behaviour in a new session — cannot be until the gateway runs `-p backoffice`.
+Both halves are verifiable now that the gateway runs `-p backoffice`: the delivery, with the
+commands above, and the *effect* — a distinctive line in `SOUL.md` changing the agent's behaviour
+in a new session. **The effect test has not been run.**
 
 **Related:** G3 (the file is empty), plan §3, §11.1,
 [docs/design/persona-delivery.md](../design/persona-delivery.md) — which carries the read-only
@@ -122,98 +124,151 @@ decision, the `SOUL.md` / `SOUL_DEVELOPS.md` question, and the multi-persona tar
 
 ## G3 — `agents/backoffice/SOUL.md` is empty
 
-**Priority:** P1 — cheapest high-value item in the plan, and now the only thing standing between
-the repo and a working persona.
+**Status: Fixed 2026-08-20.**
 
-The file exists at 0 bytes. The persona described in plan §3 does not exist anywhere; the agent
-runs on Hermes defaults. Since G2 closed, this file **is** mounted at
-`/opt/data/profiles/backoffice/SOUL.md`, so its
-emptiness now actively shadows whatever the setup wizard wrote into the volume rather than merely
-being ignored.
+The file was 0 bytes, so the persona described in plan §3 existed nowhere and the agent ran on
+Hermes defaults. Because G2 had closed, the empty file was mounted at
+`/opt/data/profiles/backoffice/SOUL.md` and actively shadowed whatever the setup wizard had written
+into the volume, rather than merely being ignored.
 
-**Evidence:**
+**Fix applied.** Filled from `agents/template/SOUL.md` per plan §3.3 — now 2953 bytes. Both
+decisions the entry called for were taken, and the resulting section list records them:
+
+| Section | Present | Why |
+|---|---|---|
+| Identity, How you answer, Boundaries | yes | The baseline from the template. |
+| What you remember | **kept** | The reader/writer split (plan §10.1) has not landed, so the single `backoffice` profile legitimately carries both recall and retention. Revisit when §10.1 lands — [G8](#g8--slack-opens-before-the-readerwriter-split) is the entry that will move first. |
+| Untrusted content | **omitted** | No tool emits `<untrusted_content>` markers yet. The template says so itself: teaching the agent to expect markers it will never see is worse than omitting the section. Add it with the tool that emits them. |
+
+This also unblocked G2's second residual — the file was filled *before* the `-p backoffice` switch
+flipped, which was the ordering constraint.
+
+**Verify:**
 
 ```sh
-stat -c '%s bytes' agents/backoffice/SOUL.md   # → 0 bytes
+stat -c '%s bytes' agents/backoffice/SOUL.md                      # → 2953 bytes
+docker exec hermes head -5 /opt/data/profiles/backoffice/SOUL.md  # after deploy.sh
 ```
 
-**Fix:** fill from `agents/template/SOUL.md`, following plan §3.3. Two decisions to make while
-filling it:
-
-- **Omit the "What you remember" section** if and when the reader/writer split (plan §10.1) lands —
-  under that split the reader holds recall only, and the retention rules belong to the writer.
-  Today there is no split, so the single `backoffice` profile legitimately carries both.
-- **Omit the "Untrusted content" section** until some tool actually emits `<untrusted_content>`
-  markers. The template says so itself: teaching the agent to expect markers it will never see is
-  worse than omitting the section.
-
-**Verify:** the delivery path is in place (G2), so it is a straight check —
-`docker exec hermes head -5 /opt/data/profiles/backoffice/SOUL.md` after
-`git pull && docker compose restart hermes` must show what you wrote.
+Note the restart requirement from G2: `git pull` replaces the file's inode and the bind mount keeps
+pointing at the old one, so persona edits need `docker compose restart hermes`. `scripts/deploy.sh`
+does this unconditionally.
 
 ---
 
 ## G1 — `NOTION_API_KEY` is declared but reaches no container
 
-**Priority:** P2 — nothing breaks, but the repo misrepresents its own state.
+**Status: Fixed 2026-08-20 — option B, and the consumer now exists.**
 
 *Originally:* the root `.env.example` declared `NOTION_API_KEY` while no service received it, so
-the repo implied a Notion capability it did not have.
+the repo implied a Notion capability it did not have — `grep -c NOTION docker-compose.yml` → 0.
 
-*As of 2026-08-19:* the key has been **moved out of the root `.env.example`** into
-`agents/<name>/.env.example`, where it sits commented out with a note that nothing consumes it yet.
-The delivery path exists (per-profile `.env`, mounted `:ro`); the consumer does not. The repo no
-longer claims a capability it lacks, so what remains is the actual Notion work in plan §4 rather
-than a documentation defect.
+*2026-08-19:* the key moved out of the root `.env.example` into `agents/<name>/.env.example`,
+commented out. That closed the misrepresentation but left the loop open: a delivery path with no
+consumer at the end of it.
 
-**Evidence:**
+**What closed it.** All three parts are now in place, and they sit in three deliberately different
+layers:
 
-```sh
-grep -c NOTION docker-compose.yml   # → 0
-```
-
-**Stated intent.** `.env.example` now carries the annotation:
-
-> Agents need their own token key to fine-grain control access rights.
-> Move to `agents/<agent-type>/.env.example`
-
-That is the right instinct and it matches plan §9.2: per-profile Notion scope has to come from a
-per-profile *integration*, because scoping by prompt does not satisfy the §0 access constraint.
-It also points the same direction as plan §4.2.1, where the token belongs to the sync service and
-the agent holds no Notion credential at all.
-
-**Fix — pick one, and do it in the same commit as the `.env.example` line:**
-
-| Option | When | Action |
+| Part | Where | Why there |
 |---|---|---|
-| **A — remove** | Notion work is not imminent | Delete the key from root `.env.example`. Re-add it under the design that actually lands. Leaves no false signal. |
-| **B — per-agent env** | **Chosen, in progress 2026-08-19** | `agents/<name>/.env.example` exists and is mounted read-only into each profile home; the real `.env` is gitignored. The key is **commented out** there, because nothing consumes it yet — uncommenting it is the remaining step, and belongs with §4, not before it. |
-| **C — plumb as-is** | Running the interim spike in plan §4.4 | Add `- NOTION_API_KEY` (bare form) to the `hermes` service. **Time-box it.** On this path the agent holds a Notion credential directly and free-text Notion content reaches it unscreened — acceptable only while the surface stays Tailscale-only, never once Slack lands. |
+| The **tool** — Notion's `ntn` CLI, plus `NOTION_KEYRING=0` | `docker/Dockerfile` (image) | Container-wide, and not a secret. `NOTION_KEYRING=0` is a fact about running headless, not about any one agent. |
+| The **delivery path** — `agents/backoffice/.env` mounted `:ro` at `/opt/data/profiles/backoffice/.env` | `docker-compose.yml` | Per-profile, long-form bind with `create_host_path: false` so a missing file fails loudly (see G2). |
+| The **credential** | `agents/<name>/.env`, gitignored | Per-agent scope is the access boundary (plan §0, §9.2). Prompting cannot enforce it; a scoped token can. |
 
-**Do not leave it dangling.** Whichever option, the repo should not claim a capability it lacks.
+The split is the point: **the image grants the tool, the `.env` grants the access.** A second
+persona gets `ntn` and no Notion reach whatsoever.
+
+**The Slack caveat resolved, but not by this entry.** `.env.example` warns that a live Notion
+credential is "acceptable only while the surface stays Tailscale-only, never once Slack lands" —
+and Slack has since landed. What makes that survivable is [G8](#g8--slack-opens-before-the-readerwriter-split)'s
+control, not anything here: `platform_toolsets.slack` grants five toolsets — `clarify`, `memory`,
+`session_search`, `skills`, `todo` — and **both of the `notion` skill's execution paths need a
+toolset that is not in that list.** The `ntn` CLI needs `terminal`; the raw-curl fallback needs
+`terminal` or `web`. So the credential is live in the container and unreachable from the shared
+surface.
+
+**That makes G1 and G8 load-bearing for each other.** If `platform_toolsets.slack` ever regains
+`terminal`, `web`, `file` or `code_execution`, this credential becomes reachable from Slack in the
+same commit — with no change to any Notion file to signal it. Treat that list as guarding the
+Notion token, not just the shell.
+
+**Two residuals, both documentation:**
+
+1. **`agents/backoffice/.env.example` describes a line it no longer contains.** The comment block
+   says "Both are genuinely needed, so both are set here" and warns that setting only the key gives
+   a quiet failure — the skill reports itself correctly configured while `ntn` reports "API token
+   is invalid". But `NOTION_API_TOKEN=${NOTION_API_KEY}` was deleted from both this file and
+   `agents/template/.env.example` in `a2fe57d` (2026-08-19), so the file now ships exactly the state
+   its own comment warns about. Either the second name turned out to be unnecessary — in which case
+   the comment should say so — or it is still needed and the next person to copy `.env.example`
+   hits the described failure. **The working `.env` on the VPS is the evidence; reconcile the
+   comment with it.**
+2. The same comment still says the key is for "Notion sync, no crm-mcp (plan §4)" and points at
+   this entry as an open gap. Re-point it once §4 lands.
+
+**Related:** plan §4.2.1, where the token ultimately belongs to the sync service and the agent holds
+no Notion credential at all — this fix is the interim, not that end state.
 
 ---
 
 ## G5 — Images track `:latest`
 
-**Priority:** P2.
+**Priority:** P2. **Restated 2026-08-20** — the gap is real, but the mechanism the original entry
+described has since stopped existing, and the actual risk is a different one.
 
-Both `hermes` and `hindsight` float on `:latest`, so a breaking upstream release lands unannounced
-on the next `docker compose pull`. Plan §15 lists version pinning as the mitigation for release
-churn, which means **the repo currently contradicts its own stated risk control**.
+**The original claim, and why it no longer holds.** The entry said a breaking release "lands
+unannounced on the next `docker compose pull`". Neither image can do that today:
 
-**Evidence:**
+- **`hermes` is no longer pulled at all.** `docker/Dockerfile` turned it into a local build, so
+  `docker-compose.yml` now carries `build.args.HERMES_IMAGE: nousresearch/hermes-agent:latest`,
+  `image: hermes-agent-stack:latest` and `pull_policy: build`. `docker compose pull` cannot reach
+  it; only `docker compose build --pull hermes` re-resolves the base. README § Upgrading documents
+  that as deliberate. Of the two `:latest` strings in the hermes service, **one is a purely local
+  tag and harmless** — the floating reference is the build arg.
+- **`hindsight` is not pulled on a deploy either.** `scripts/deploy.sh` runs `git pull` then
+  `docker compose up -d`; there is no `docker compose pull` in it. Upgrades are the two manual
+  commands in the README.
 
-```
-nousresearch/hermes-agent:latest
-ghcr.io/vectorize-io/hindsight:${HINDSIGHT_VERSION:-latest}
-```
+So there is no *unannounced* upgrade path. What remains is the **fresh-host path**: on a new VPS,
+or after a `docker system prune -a`, `up -d` pulls and builds whatever `:latest` resolves to that
+day, with no record anywhere of what that was.
+
+**What `:latest` actually points at.** Resolved against both registries on 2026-08-20:
+
+| Reference | Resolves to | Note |
+|---|---|---|
+| `nousresearch/hermes-agent:latest` | `sha256:3559db4b…` | **Byte-identical to `:main`** — same digest, both pushed 2026-08-20T12:13. The newest *release* tag, `v2026.8.18`, is a different image (`sha256:22e37bb4…`). |
+| `ghcr.io/vectorize-io/hindsight:latest` | `0.9.1`, built 2026-08-14 | Per its own `org.opencontainers.image.version` label (revision `e5b49eb`). Three minor versions past the `0.6.x` line. |
+
+The first row is the one that changes the character of this gap: **`:latest` on Hermes is not "the
+newest release", it is the rolling `main` build.** Pinning here is not churn control, it is the
+difference between running a release and running a dev branch — and nothing in the repo says which
+of the two is on the VPS.
+
+The second row is the reproducibility failure, and it compounds with **G6**: a rebuild from an
+unchanged git SHA can move Hindsight across three minor versions, which is a schema migration
+against `hindsight_pg_data` — the one volume that cannot be regenerated, and the one with no
+scheduled backup.
 
 (`pgvector/pgvector:pg${HINDSIGHT_DB_VERSION:-18}` is already pinned to a major — fine.)
 
-**Fix:** pin both to known-good tags. `HINDSIGHT_VERSION` already exists as the override hook;
-add an equivalent `HERMES_VERSION` for symmetry. Test upgrades against a scratch stack before
-pulling on the live one.
+**So the gap is not "a pull will surprise you". It is: the repo cannot state what it runs, and
+cannot reproduce it.** Plan §15 lists version pinning as the mitigation for release churn, so the
+repo still contradicts its own stated risk control — just for a different reason than recorded.
+
+**Fix.** Both upstreams publish pinnable tags: Hermes ships date-versioned releases
+(`v2026.8.18` is current), Hindsight ships semver through `0.9.1`, each with a `-slim` variant.
+
+1. Pin `HERMES_IMAGE` in `docker-compose.yml` to a release tag, and add a `HERMES_VERSION` override
+   hook for symmetry with `HINDSIGHT_VERSION`.
+2. Set `HINDSIGHT_VERSION` in `.env.example` to a real version — it currently ships the literal
+   `latest`, so every copied `.env` floats by default.
+3. Test upgrades against a scratch stack before moving the live one.
+
+**Open question, not part of this gap:** Hindsight's `-slim` variants may bear on **G7** — the
+README flags that Hindsight can resolve its embeddings provider to an in-process model, which is
+the footprint G7 is about. What `-slim` omits has not been checked.
 
 ---
 
