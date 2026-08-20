@@ -93,7 +93,6 @@ memory:
 # only lever — re-check with `tools --summary -p backoffice` after deploying.
 platform_toolsets:
   cli:
-    - bfl
     - browser
     - clarify
     - code_execution
@@ -161,6 +160,8 @@ platform_toolsets:
 agent:
   disabled_toolsets:
     - browser
+    - bfl
+    - kanban
 #    - web
 #    - terminal
 #    - files
