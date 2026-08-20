@@ -50,13 +50,40 @@ cmd_discover() {
 cd "$1"
 run() { printf '\n----- %s -----\n' "$*"; docker exec hermes "$@" 2>&1 || true; }
 
-run hermes --help
-run hermes slack --help
-run hermes config get channels -p backoffice
-run hermes config get -p backoffice
-run hermes slack manifest --agent-view
+# Round 1 answered: `hermes slack` only generates manifests, and access
+# control is `hermes pairing`, not an allowlist config key. What is still open
+# is where Slack tokens are read from and whether channels.slack is real.
+
+# Env var names, straight from the source. `hermes config` reports the install
+# root as /opt/hermes — an earlier version of this probe assumed an importable
+# python package and silently found nothing, which is not the same as "there
+# are none". Print the file count so an empty result stays distinguishable
+# from a broken search.
+printf '\n----- SLACK_* env vars referenced by the install -----\n'
+docker exec hermes sh -c '
+  echo "searching /opt/hermes ($(find /opt/hermes -type f 2>/dev/null | wc -l) files)"
+  grep -rhoE "SLACK_[A-Z0-9_]+" /opt/hermes 2>/dev/null | sort -u
+' 2>&1 || true
+
+# Where Slack actually gets configured: gateway setup, not env vars and not
+# `hermes slack`. Its writes land in config.yaml / .env, both of which are
+# mounted READ-ONLY for backoffice — see the note in agents/backoffice/config.yaml.
+run hermes gateway setup --help
+# `hermes tools --summary` refuses without a TTY, and discover pipes a script
+# into ssh — so no interactive hermes command can ever run from here. Use the
+# `list` subcommand, and run the interactive UI by hand on the VPS.
+run hermes tools list
+run hermes memory --help
+
+# Is "channels" a real key, or does config get say that about anything?
+run hermes config get channels.slack -p backoffice
+run hermes config get zzz_control_probe -p backoffice
+
+# The effective config — this is the schema. Skim before pasting: config.yaml
+# holds settings not secrets, but check nothing sensitive rode along.
+run hermes config -p backoffice
+
 run hermes gateway status -p backoffice
-run hermes pairing --help
 REMOTE
 }
 

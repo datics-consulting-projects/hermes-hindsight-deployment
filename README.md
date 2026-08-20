@@ -533,7 +533,8 @@ Everything that can live in git does:
 | Piece | Where | Why there |
 | --- | --- | --- |
 | Scopes, events, DM settings | `agents/backoffice/slack-manifest.yaml` | Not mounted — Hermes never reads it. It is what you paste into Slack's App Manifest tab, kept in git so a widened permission is a reviewable commit rather than an invisible click. |
-| Channel behaviour, allowlist | `agents/backoffice/config.yaml` | Already mounted `:ro`, so this needs **no `hermes config set` on the server**. Edit, commit, deploy. |
+| What the agent can *do* on Slack | `agents/backoffice/config.yaml`, `platform_toolsets.slack` | Already mounted `:ro`, so this needs **no `hermes config set` on the server**. Edit, commit, deploy. |
+| Who may talk to it | `hermes pairing`, in the volume | Not config-as-code — a runtime approval store. Audit it, don't expect to review it in git. |
 | The three tokens | `agents/backoffice/.env` (gitignored) | Per-agent, not root `.env`. The compose `environment:` list is container-wide — a second persona would inherit this bot's identity and be able to post as it. |
 
 ### Enabling it
@@ -564,13 +565,13 @@ rotating secret for one app). Everything else is a script.
 Then `/invite` the bot to **exactly one** channel. It cannot read channels it
 was not invited to, so the invite is the scope.
 
-### Mention-only, twice over
+### Mention-only rests on one thing
 
 The manifest subscribes to `app_mention` and nothing else, so Slack never
-delivers the channel's other messages — that control holds even if the config
-block is wrong or ignored. `respondTo: mention` in `config.yaml` is the second
-layer, not the first. Worth keeping in that order, because a misparsed config
-fails *open*.
+delivers the channel's other messages. That is the *whole* mechanism — this
+build has no `channels:` config key, so there is no second layer and nothing to
+fall back on. Adding `message.channels` to the manifest is therefore a single
+decision that puts every message in the channel in front of the agent.
 
 The test that matters is the silent one: post in the channel **without**
 mentioning the bot and confirm nothing happens.
@@ -578,13 +579,27 @@ mentioning the bot and confirm nothing happens.
 ### The gate this opens
 
 Slack is the first surface where people who are not you put text in front of the
-agent, and Hermes syncs turns to Hindsight after every response — so by default
-anything said in the channel becomes durable memory. The plan gates this behind
-the reader/writer split (§10.1), which is not built. The interim is
-`memory.write_approval: true`, already applied in `agents/backoffice/config.yaml`:
-writes are staged for review instead of landing silently. Keep the channel
-single and the allowlist explicit, and never set `GATEWAY_ALLOW_ALL_USERS=true`.
-Tracked as [G8](docs/issues/gap-register.md).
+agent. Two consequences, one fixed and one still open.
+
+**What the agent can do there is restricted, and verified.**
+`platform_toolsets.slack` in `agents/backoffice/config.yaml` leaves five
+toolsets — `clarify`, `memory`, `session_search`, `skills`, `todo`. No terminal,
+files, code execution, browser, web, delegation or cron. Your CLI and dashboard
+keep all 18; the restriction is per-platform. Confirm after any change:
+
+```sh
+docker exec -it hermes hermes tools --summary     # needs -it
+```
+
+**Memory writes are the part still resting on trust.** Hermes syncs turns to
+Hindsight after every response, so anything said in the channel tends toward
+durable memory. The plan gates this behind the reader/writer split (§10.1),
+which is not built; the interim is `memory.write_approval: true`. That key
+round-trips through `config set`, but nothing observable proves it is
+*enforced* — and in this build a config key that nothing reads is silent, not an
+error. Keep the channel single, audit `hermes pairing list`, and never set
+`GATEWAY_ALLOW_ALL_USERS=true`. Tracked as
+[G8](docs/issues/gap-register.md).
 
 ## Operating
 

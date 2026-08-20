@@ -34,6 +34,15 @@ model:
 
 memory:
   provider: hindsight
+  # !! ALSO UNVERIFIED. The generated `memory:` block has memory_enabled,
+  # user_profile_enabled, memory_char_limit, user_char_limit, provider,
+  # nudge_interval and flush_min_turns — no write_approval. The gate itself
+  # does exist (Slack's /memory command exposes `approval on|off`), so the key
+  # may simply be absent until set. Confirm it round-trips before treating it
+  # as the G8 mitigation:
+  #   hermes config set memory.write_approval true -p default
+  #   hermes config get memory.write_approval -p default
+  #
   # ON before any new input path opens — plan §11.2. Slack IS that new input
   # path: it is the first surface where people who are not you put text in
   # front of the agent, and Hermes syncs turns to Hindsight after each
@@ -42,42 +51,105 @@ memory:
   # reader/writer split, which is not built. See gap-register G8.
   write_approval: true
 
-# --- Slack channel behaviour — PENDING DISCOVERY ---------------------------
-# The scopes live in slack-manifest.yaml; this block is how the agent behaves
-# once connected. Uncomment after running
+# --- Slack ------------------------------------------------------------------
+# DISCOVERY IS DONE (2026-08-20). Findings, so nobody re-derives them:
 #
-#   ./scripts/slack-preflight.sh discover
+#   * There is NO `channels:` key in this build. Plan §6.3's
+#     `channels.slack.respondTo: mention` does not exist — do not add it.
+#     Mention-only therefore has exactly ONE enforcement point: the committed
+#     slack-manifest.yaml subscribes to `app_mention` and no other bot event,
+#     so Slack never delivers the channel's other messages. There is no second
+#     layer. Do not add `message.channels` to the manifest without accepting
+#     that every message in the channel then reaches the agent.
+#   * Slack is configured by `hermes gateway setup`, not by `hermes slack`
+#     (manifest generation only) and not by config keys.
+#   * Authorization is `hermes pairing list|approve|revoke`, a runtime store in
+#     the volume. There is no allowlist to keep in git — audit it instead:
+#       docker exec hermes hermes pairing list
+#     Never GATEWAY_ALLOW_ALL_USERS=true.
+
+# What the agent may DO on Slack, as opposed to on the CLI. This is the key
+# `agent.disabled_toolsets` was mistaken for, and unlike that one it is real:
+# produced by `hermes tools disable --platform slack …` and verified with
+# `hermes tools --summary` (CLI stayed 18/28, Slack dropped to 6/28).
 #
-# and confirming these are the key names THIS Hermes build actually uses.
-# Guessing is not cheap here: the file is mounted read-only, so a key Hermes
-# rejects cannot be patched with "config set" — it needs an edit, a commit and
-# a restart — and a key it merely IGNORES fails open, leaving the agent
-# answering everyone. The manifest's app_mention-only event subscription is the
-# backstop for precisely that case.
+# The full map is pinned, not just the `slack:` entry, so a partial override
+# can never leave another platform's list undefined. Cost of pinning: a Hermes
+# upgrade that adds a platform will not appear here, and this file is read-only
+# so the migration cannot add it — the same tradeoff the header describes.
 #
-# If discovery shows no config keys for this, the fallback is the env-var form
-# in plan §6.1 (SLACK_ALLOWED_USERS / SLACK_HOME_CHANNEL) in the per-agent
-# .env — worse, because the allowlist stops being reviewable in git.
-#
-#channels:
-#  slack:
-#    respondTo: mention          # silent unless @-mentioned — plan §6.3
-#    # Exactly one channel for the pilot. The bot cannot read a channel it was
-#    # not invited to, so the /invite is itself the scope.
-#    homeChannel: "#<channel>"
-#    # Explicit member IDs, NEVER GATEWAY_ALLOW_ALL_USERS=true. Here rather
-#    # than in SLACK_ALLOWED_USERS because member IDs are not secret, and in
-#    # git a widened allowlist is a reviewable commit instead of an untracked
-#    # edit on the VPS. Find one: avatar → View full profile → More → Copy
-#    # member ID. Starts with U.
-#    allowedUsers:
-#      - U...
+# Seeded on the writable `default` profile and copied here, exactly as the
+# header prescribes. `kanban` is removed by hand: `tools disable` rejects it as
+# an unknown toolset name yet it shows up enabled, so deleting the line is the
+# only lever — re-check with `tools --summary` after deploying.
+platform_toolsets:
+  cli:
+    - bfl
+    - browser
+    - clarify
+    - code_execution
+    - computer_use
+    - cronjob
+    - delegation
+    - file
+    - image_gen
+    - memory
+    - session_search
+    - skills
+    - terminal
+    - todo
+    - tts
+    - vision
+    - web
+  slack:
+    - clarify
+    - memory
+    - session_search
+    - skills
+    - todo
+  telegram:
+    - hermes-telegram
+  discord:
+    - hermes-discord
+  whatsapp:
+    - hermes-whatsapp
+  signal:
+    - hermes-signal
+  homeassistant:
+    - hermes-homeassistant
+  qqbot:
+    - hermes-qqbot
+  yuanbao:
+    - hermes-yuanbao
+  teams:
+    - hermes-teams
+  google_chat:
+    - hermes-google_chat
 
 # Removing the execution toolsets rather than sandboxing them — plan §11.2. A
 # Q&A agent has no legitimate shell, disk or browsing use, and everything it
 # needs arrives through the memory provider. This is what enforces the limits
 # SOUL.md's "Boundaries" section describes; the persona states them, this
 # applies them.
+# !! CONFIRMED INERT — 2026-08-20. `hermes tools --summary` reports Slack at
+# 18/28 toolsets, identical to CLI, with Browser Automation ✓ ENABLED — and
+# `browser` is the only entry left in the list below. The key is read by
+# nothing: Hermes' generated config (_config_version 37) has no
+# `agent.disabled_toolsets`, and `hermes config set` is schemaless, so it
+# accepts any key and enforces only the ones something reads.
+#
+# So this block is decoration, and the comment above it ("this is what enforces
+# the limits SOUL.md's Boundaries section describes") was never true. SOUL.md's
+# boundaries are prompting, nothing more.
+#
+# THE REAL LEVER is per-platform: `hermes tools disable <toolset>` and the
+# top-level `platform_toolsets:` map, which has a first-class `slack:` entry.
+# Restricting Slack specifically is possible and is the thing to do before any
+# /invite — the agent as configured today would arrive in the channel holding
+# Terminal, File Operations, Code Execution, Computer Use and Web.
+#
+# Left in place rather than deleted: it is the record of what was intended, and
+# what has to be re-expressed through platform_toolsets to actually hold.
 agent:
   disabled_toolsets:
     - browser
@@ -102,10 +174,12 @@ agent:
 #   max_turns: 60
 #   verify_on_stop: false
 #
-# tool_loop_guardrails:
+# tool_loop_guardrails:            # real shape, from the generated config:
+#   warnings_enabled: true
 #   hard_stop_enabled: true
-#   loop_caps:
-#     max_subagents: 3
+#   warn_after: {exact_failure: 2, same_tool_failure: 3, idempotent_no_progress: 2}
+#   hard_stop_after: {exact_failure: 5, same_tool_failure: 8, idempotent_no_progress: 5}
+#   # plan §11.2's `loop_caps.max_subagents` does not exist in this build.
 #
 # tool_output:
 #   max_bytes: 30000

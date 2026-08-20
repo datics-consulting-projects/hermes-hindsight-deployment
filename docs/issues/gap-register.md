@@ -254,24 +254,58 @@ grep -n '§' agents/template/SOUL.md
 
 ## G8 — Slack opens before the reader/writer split
 
-**Priority:** P2 — a knowing deviation with a mitigation, not an oversight. It becomes P1 the day
-§4 ships.
+**Priority:** P2. Briefly P1: the original entry assumed the agent held no execution tools, that
+assumption was checked on 2026-08-20 and was false, and it was fixed the same day. The history is
+kept below because the *way* it was false — a config key that silently did nothing — is the part
+worth remembering.
 
 Plan §6 states the condition plainly: *"Do not open Slack before §10.1 is in place. The reader/
 writer split is a prerequisite, not a follow-up."* Slack is being opened anyway.
 
-**Why the deviation is defensible today.** The threat §10.1 defends against is untrusted *tool
-output* — a poisoned Notion note reaching the process that writes memory. That path does not exist
-yet: §4 has not shipped, so the agent holds no `crm_*` tools, and
-`agents/backoffice/config.yaml` disables the `web`, `terminal`, `files` and `browser` toolsets.
-What Slack actually adds is narrower: people who are not you can now say things that Hermes syncs
-to Hindsight after each response, where they become durable memory.
+**The original mitigation did not hold, and was replaced. Verified 2026-08-20.**
+
+The argument was: §4 has not shipped, so the agent holds no `crm_*` tools, and
+`agents/backoffice/config.yaml` disables `web`, `terminal`, `files` and `browser` — so Slack only
+adds "people can say things that become memory". The second half is false.
+
+`docker exec -it hermes hermes tools --summary` reports:
+
+```
+💼 Slack  (18/28)
+  ✓ ⚡ Code Execution      ✓ 💻 Terminal & Processes    ✓ 📁 File Operations
+  ✓ 🌐 Browser Automation  ✓ 🖱️  Computer Use            ✓ 🔍 Web Search & Scraping
+  ✓ 👥 Task Delegation     ✓ ⏰ Cron Jobs
+```
+
+Identical to CLI. `agent.disabled_toolsets` is read by nothing — Hermes' generated config has no
+such key, and `hermes config set` is schemaless, so it accepts keys nothing enforces. `browser` was
+the only entry still listed there and Browser Automation is enabled.
+
+**What that means concretely.** Invite the bot to a channel today and anyone who can post in it is
+one prompt away from an agent that runs shell commands, reads and writes files, executes code and
+fetches URLs — inside a container holding `OPENROUTER_API_KEY`, the dashboard Basic Auth
+credentials, the mounted per-agent `.env`, and network reach to `hindsight` and `hindsight-db`.
+`env` is one terminal call. This is not injection-dependent; asking politely also works.
+
+**Fixed the same day.** The lever is per-platform: `hermes tools disable --platform slack …`,
+which writes the top-level `platform_toolsets:` map. Slack went from 18/28 toolsets to 5/28 —
+`clarify`, `memory`, `session_search`, `skills`, `todo` — while CLI stayed at 18/28, so the
+dashboard surface was not touched. The resulting map is pinned in
+`agents/backoffice/config.yaml`, so it is config-as-code rather than volume state and survives a
+`profile create --clone`.
+
+**The transferable lesson:** `hermes config set` is schemaless. It accepts and round-trips any key,
+enforced or not, and `config get` reports an unknown key and a real-but-unset key with the same
+"Config key not set". A key appearing in this repo's `config.yaml` is therefore **no evidence at
+all** that anything reads it. `hermes tools --summary` and equivalents are the only proof. Assume
+any guardrail added here is decoration until observed working.
 
 **Mitigation in place:**
 
 | Control | Where | Effect |
 |---|---|---|
-| `memory.write_approval: true` | `agents/backoffice/config.yaml` | Retention is staged for review instead of landing silently. This is the load-bearing one. |
+| `platform_toolsets.slack` — 5 toolsets | `agents/backoffice/config.yaml` | No terminal, file, code execution, computer use, browser, web, delegation or cron on Slack. **This is now the load-bearing control**, and unlike the one below it is verified. |
+| `memory.write_approval: true` | `agents/backoffice/config.yaml` | Retention staged for review rather than landing silently. **Partially verified:** the key round-trips through `config set`/`config get`, but `hermes memory` exposes only `setup/status/off/reset` — no approval subcommand — so nothing in the CLI confirms it is *enforced*. The evidence it is real is Slack's `/memory approval on\|off` gateway command, which the pilot manifest does not grant. |
 | `app_mention` as the only bot event | `agents/backoffice/slack-manifest.yaml` | Slack never delivers the channel's other messages, so mention-only holds at the Slack layer even if the config key is wrong. |
 | One channel, explicit allowlist | the `/invite`, and `channels.slack` | The bot cannot read channels it was not invited to. Never `GATEWAY_ALLOW_ALL_USERS=true`. |
 | No DM scopes | `slack-manifest.yaml` | No second, unwitnessed surface — plan §6.2. |

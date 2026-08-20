@@ -48,14 +48,15 @@ oauth_config:
 settings:
   event_subscriptions:
     bot_events:
-      # ONLY app_mention. This is the stronger half of the mention-only control:
-      # Slack never delivers the channel's other messages at all, so it holds
-      # even if the channels.slack config in config.yaml is wrong or ignored.
-      # config.yaml's respondTo is the second layer, not the first.
+      # ONLY app_mention, and this is the ONLY thing enforcing mention-only.
+      # Discovery (2026-08-20) found no `channels:` key in this build, so plan
+      # §6.3's `respondTo: mention` does not exist and there is no config-side
+      # second layer. Slack simply never delivers the channel's other messages.
       #
-      # If discovery shows Hermes needs message.channels to work, adding it is
-      # a real change in exposure — every message in the channel starts
-      # reaching the agent — not a formality. Decide it explicitly.
+      # Consequence: adding message.channels here is not a formality — it is
+      # the single decision that puts every message in the channel in front of
+      # the agent. If the bot turns out to be silent on @-mentions without it,
+      # that is a real tradeoff to weigh, not a bug to patch around.
       - app_mention
   interactivity:
     # No buttons, modals or shortcuts. Nothing in the agent needs them, and each
