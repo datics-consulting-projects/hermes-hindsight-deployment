@@ -44,25 +44,40 @@ cmd_discover() {
   load_deploy_env
   heading "Discovering the Slack surface of the deployed Hermes build"
   note "Every command is best-effort — a 'not found' here is itself the answer."
-  note "Paste this whole output back when writing the channels.slack block."
+  note "Paste this whole output back when writing the slack: block."
 
   remote <<'REMOTE'
 cd "$1"
 run() { printf '\n----- %s -----\n' "$*"; docker exec hermes "$@" 2>&1 || true; }
 
-# Round 1 answered: `hermes slack` only generates manifests, and access
-# control is `hermes pairing`, not an allowlist config key. What is still open
-# is where Slack tokens are read from and whether channels.slack is real.
+# Rounds 1 and 2 are answered, and their answers are in the plan's §2:
+# `hermes slack` only generates manifests; tokens are environment variables;
+# the behaviour gates are BOTH env vars and keys in a top-level `slack:` block,
+# with the environment overriding the file. What remains open is per-upgrade
+# drift, which is what this probe is for now.
 
-# Env var names, straight from the source. `hermes config` reports the install
-# root as /opt/hermes — an earlier version of this probe assumed an importable
-# python package and silently found nothing, which is not the same as "there
-# are none". Print the file count so an empty result stays distinguishable
-# from a broken search.
-printf '\n----- SLACK_* env vars referenced by the install -----\n'
+# NEITHER LIST BELOW IS THE ANSWER ON ITS OWN — that is the whole lesson of
+# issues S9. The first matches every uppercase SLACK_* identifier, so it
+# includes regexes and dicts that are not environment variables at all. The
+# second narrows to names read through os.environ/getenv, and UNDERCOUNTS:
+# SLACK_ALLOWED_USERS is resolved through a platform->variable map and never
+# appears as a literal read, so it is missing from the narrow list despite
+# being the most important gate in it. Read both, then grep the bare name.
+#
+# `hermes config` reports the install root as /opt/hermes — an earlier version
+# of this probe assumed an importable python package and silently found
+# nothing, which is not the same as "there are none". Print the file count so
+# an empty result stays distinguishable from a broken search.
+printf '\n----- SLACK_* identifiers anywhere in the install (superset) -----\n'
 docker exec hermes sh -c '
   echo "searching /opt/hermes ($(find /opt/hermes -type f 2>/dev/null | wc -l) files)"
   grep -rhoE "SLACK_[A-Z0-9_]+" /opt/hermes 2>/dev/null | sort -u
+' 2>&1 || true
+
+printf '\n----- of those, read from the environment (narrow, undercounts) -----\n'
+docker exec hermes sh -c '
+  grep -rhoE "(environ|getenv)[^A-Za-z]{1,8}SLACK_[A-Z0-9_]+" /opt/hermes 2>/dev/null \
+    | grep -oE "SLACK_[A-Z0-9_]+" | sort -u
 ' 2>&1 || true
 
 # Where Slack actually gets configured: gateway setup, not env vars and not
@@ -75,8 +90,11 @@ run hermes gateway setup --help
 run hermes tools list
 run hermes memory --help
 
-# Is "channels" a real key, or does config get say that about anything?
-run hermes config get channels.slack -p backoffice
+# The behaviour gates, as the profile sees them. The control probe underneath
+# is not optional: `config get` is schemaless and reports an unknown key and a
+# real-but-unset one identically, so the second line is what makes the first
+# line's output mean anything.
+run hermes config get slack -p backoffice
 run hermes config get zzz_control_probe -p backoffice
 
 # The effective config — this is the schema. Skim before pasting: config.yaml
@@ -114,11 +132,16 @@ cmd_check() {
     "")     fail "SLACK_APP_TOKEN is unset — generate it when you enable Socket Mode"; failed=1 ;;
     *)      fail "SLACK_APP_TOKEN does not start with xapp-"; failed=1 ;;
   esac
+  # Not a failure. No Slack code path in this build reads SLACK_SIGNING_SECRET
+  # — it verifies inbound HTTP request signatures, and Socket Mode has no
+  # inbound HTTP. The plugin's own requires_env names only the two tokens
+  # above. Set it anyway for the day something needs it, but do not let its
+  # absence block a deploy that would work.
   if [ -n "$secret" ]; then
     ok "SLACK_SIGNING_SECRET present"
   else
-    fail "SLACK_SIGNING_SECRET is unset (Basic Information → App Credentials)"
-    failed=1
+    note "SLACK_SIGNING_SECRET is unset (Basic Information → App Credentials)."
+    note "Not fatal: nothing in this build reads it. Socket Mode uses the app token."
   fi
 
   [ "$failed" -eq 0 ] || { note ""; note "Fix the above, then re-run."; exit 1; }
@@ -159,10 +182,11 @@ cmd_verify() {
   remote <<'REMOTE'
 cd "$1"
 
-# If the read-only config.yaml had an unknown or malformed key, this is where
-# it shows: the block either comes back or it does not.
-printf '\n----- config get channels -p backoffice -----\n'
-docker exec hermes hermes config get channels -p backoffice 2>&1 || true
+# If the read-only config.yaml had a malformed key, this is where it shows:
+# the block either comes back or it does not. It does NOT prove the gateway
+# applies the block — see issues S10 for the test that does.
+printf '\n----- config get slack -p backoffice -----\n'
+docker exec hermes hermes config get slack -p backoffice 2>&1 || true
 
 printf '\n----- gateway status -p backoffice -----\n'
 docker exec hermes hermes gateway status -p backoffice 2>&1 || true

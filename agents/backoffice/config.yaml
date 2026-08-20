@@ -56,31 +56,113 @@ memory:
 #
 #   * There is NO `channels:` key in this build. Plan §6.3's
 #     `channels.slack.respondTo: mention` does not exist — do not add it.
-#     Mention-only therefore has exactly ONE enforcement point: the committed
-#     slack-manifest.yaml subscribes to `app_mention` and no other bot event,
-#     so Slack never delivers the channel's other messages. There is no second
-#     layer. Do not add `message.channels` to the manifest without accepting
-#     that every message in the channel then reaches the agent.
+#     What does exist is a TOP-LEVEL `slack:` block, applied below.
 #   * Slack is configured by `hermes gateway setup`, not by `hermes slack`
-#     (manifest generation only) and not by config keys.
-#   * Authorization is `hermes pairing list|approve|revoke`, a runtime store in
-#     the volume. There is no allowlist to keep in git — audit it instead:
-#       docker exec hermes hermes pairing list
-#     Never GATEWAY_ALLOW_ALL_USERS=true.
-#
+#     (manifest generation only).
 #   * CREDENTIALS ARE ENVIRONMENT VARIABLES, not config keys — SLACK_BOT_TOKEN,
 #     SLACK_APP_TOKEN, SLACK_SIGNING_SECRET, confirmed present in /opt/hermes.
 #     Nothing about Slack auth belongs in this file; it lives in the per-agent
-#     .env. So do the BEHAVIOUR gates (SLACK_REQUIRE_MENTION, SLACK_ALLOWED_*,
-#     SLACK_DISABLE_DMS) — do not look for config keys for those either.
+#     .env.
+#   * Authorization is `hermes pairing list|approve|revoke`, a runtime store in
+#     the volume — audit it, it is not reviewable in git:
+#       docker exec hermes hermes pairing list
+#     It has a declarable companion, `SLACK_ALLOWED_USERS`, which is the ONE
+#     Slack gate with no config key: it is read straight from the environment
+#     by gateway/authz_mixin.py, so it lives in the per-agent .env and not
+#     here. Never GATEWAY_ALLOW_ALL_USERS=true or SLACK_ALLOW_ALL_USERS=true.
+#
+# CORRECTED 2026-08-20, resolving S9. An earlier version of this comment said
+# the BEHAVIOUR gates had no config keys either, and that mention-only had
+# exactly one enforcement point. Both are false. Every gate except the user
+# allowlist is bridged out of the `slack:` block below into its SLACK_* env
+# var, so this file is a genuine second layer under the manifest.
 #
 # Runbook: docs/plans/slack-integration.md
-# Open defects: docs/issues/slack-integration.md (S9 is the live one).
+# Open defects: docs/issues/slack-integration.md (S10 is the live one).
+
+# The Slack behaviour gates. HOW THIS FILE REACHES THEM, since none of it is
+# obvious from the key names — gateway/config.py::load_gateway_config() reads
+# <profile home>/config.yaml, i.e. this file, and hands its top-level `slack:`
+# mapping to the Slack plugin's `_apply_yaml_config` hook
+# (plugins/platforms/slack/adapter.py), which translates each key into the
+# SLACK_* environment variable the adapter actually reads at message time.
+#
+# PRECEDENCE IS THE TRAP: THE ENVIRONMENT WINS. Every assignment in that hook
+# is guarded by `not os.getenv(...)`, so the same gate set in the per-agent
+# .env silently overrides the value here and this file quietly stops being the
+# truth. Keep each gate in exactly ONE home. These live here; only the three
+# tokens and SLACK_ALLOWED_USERS live in .env.
+#
+# THE DEFAULTS ARE MOSTLY UNSAFE, which is the reason to pin them rather than
+# leave them alone. Read out of the installed build on 2026-08-20:
+#
+#   require_mention             default TRUE   — the only one that fails closed
+#   strict_mention              default false
+#   thread_require_mention      default false
+#   ignore_other_user_mentions  default false
+#   disable_dms                 default false
+#   allow_bots                  default "none" — safe
+#   allowed_channels            default EMPTY  — EMPTY MEANS EVERY CHANNEL
+#   free_response_channels      default empty  — lists channels answered
+#                                                WITHOUT a mention; never set
+#
+# WHAT THESE DO AND DO NOT DO TODAY. The manifest subscribes to `app_mention`
+# and nothing else, so Slack never delivers a non-mention message and these
+# gates have nothing to act on. They are not decoration for that reason: they
+# are the layer that keeps a future `message.channels` line in the manifest
+# from silently opening the channel. Set them while it costs nothing.
+slack:
+  # Answer only when @-mentioned. Already the default; pinned because a gate
+  # that matters should not depend on a default staying put across upgrades.
+  require_mention: true
+
+  # Every message in a thread needs its own @-mention. Turns off the adapter's
+  # auto-triggers — mentioned-thread memory, bot-message follow-up and
+  # session-presence — each of which answers a message that never mentioned
+  # the bot. A thread is where mention-only leaks first.
+  strict_mention: true
+
+  # The same rule stated on the other axis, for thread replies specifically.
+  # Both are set: they are separate code paths in the adapter.
+  thread_require_mention: true
+
+  # A message whose first token @-mentions someone else is addressed to that
+  # person, not to the bot. Off by default for backward compatibility.
+  ignore_other_user_mentions: true
+
+  # Enforces plan §6.2 at runtime instead of only by withholding the `im:*`
+  # scopes. Two layers, and this one does not depend on nobody re-pasting a
+  # wider manifest into Slack's UI.
+  disable_dms: true
+
+  # "none" | "mentions" | "all". Nothing here needs bot-to-bot traffic, and an
+  # admitted bot bypasses the human allowlist entirely (authz_mixin.py).
+  allow_bots: "none"
+
+  # Channels answered WITHOUT a mention. The direct negation of everything
+  # above. Pinned explicitly empty so the key is visible and unset-by-accident
+  # is distinguishable from set-to-nothing.
+  free_response_channels: []
+
+  # THE CHANNEL SCOPE, and the one line here left to fill in. When non-empty,
+  # messages from channels not in the list are ignored even on an @-mention;
+  # EMPTY MEANS NO RESTRICTION, so as written the only thing scoping the bot
+  # is the /invite. Put the pilot channel's ID here at invite time — open the
+  # channel in Slack, right-click the name, Copy link, take the C… id — and a
+  # stray invite to a second channel becomes inert instead of live.
+  # allowed_channels:
+  #   - "C0123456789"
 
 # What the agent may DO on Slack, as opposed to on the CLI. This is the key
-# `agent.disabled_toolsets` was mistaken for, and unlike that one it is real:
-# produced by `hermes tools disable --platform slack …` and verified with
-# `hermes tools --summary -p backoffice` (CLI stayed 18/28, Slack dropped).
+# `agent.disabled_toolsets` was mistaken for, and unlike that one it is
+# per-platform: produced by `hermes tools disable --platform slack …` and read
+# back with `hermes tools --summary -p backoffice`.
+#
+# VERIFIED 2026-08-20, with Slack actually configured: the Slack row reads
+# 5/28 and lists exactly the five below. The map is read AND applied — this is
+# what closes S2. Before the app existed the summary printed no Slack row at
+# all; a platform is only enumerated once it is credentialed, so the missing
+# row had been evidence of nothing.
 #
 # The full map is pinned, not just the `slack:` entry, so a partial override
 # can never leave another platform's list undefined. Cost of pinning: a Hermes
@@ -88,12 +170,20 @@ memory:
 # so the migration cannot add it — the same tradeoff the header describes.
 #
 # Seeded on the writable `default` profile and copied here, exactly as the
-# header prescribes. `kanban` is removed by hand: `tools disable` rejects it as
-# an unknown toolset name yet it shows up enabled, so deleting the line is the
-# only lever — re-check with `tools --summary -p backoffice` after deploying.
+# header prescribes.
+#
+# OMITTING A TOOLSET FROM A LIST IS NOT ALWAYS ENOUGH TO REMOVE IT. `kanban`
+# was in no list here and showed up on Slack regardless; `bfl` was in `cli:`
+# only and showed up on Slack too. What removed both was
+# `agent.disabled_toolsets` below — not their absence from this map. Toolsets
+# outside the build's own registry (the same ones `tools disable` rejects by
+# name) appear not to be governed by this map at all.
+#
+# So after every Hermes upgrade, run `tools --summary -p backoffice` and look
+# for rows that are not listed here. A new toolset arriving enabled on Slack
+# is the expected failure mode, not an unlikely one.
 platform_toolsets:
   cli:
-    - browser
     - clarify
     - code_execution
     - computer_use
@@ -139,20 +229,32 @@ platform_toolsets:
 # needs arrives through the memory provider. This is what enforces the limits
 # SOUL.md's "Boundaries" section describes; the persona states them, this
 # applies them.
-# THIS KEY WORKS. Verified 2026-08-20 by comparing profiles:
-#
-#   hermes tools --summary -p backoffice   -> CLI 17/28, Browser Automation ABSENT
-#   hermes tools --summary                 -> CLI 18/28, Browser Automation present
-#
-# `browser` is the only entry below and it is the only difference. An earlier
-# note here claimed the opposite; that reading came from the bare (default)
+# THIS KEY WORKS. Verified 2026-08-20 by comparing profiles, when `browser`
+# was the only entry: `tools --summary -p backoffice` showed Browser
+# Automation absent where the bare (default) profile showed it present. An
+# earlier note here claimed the opposite; that reading came from the default
 # profile's summary, which of course does not apply this file. Tool config is
 # per profile — always pass -p backoffice.
+#
+# IT IS ALSO THE ONLY LEVER for a toolset `platform_toolsets` does not govern.
+# `bfl` and `kanban` were added here on 2026-08-20 after both appeared on Slack
+# despite being absent from `platform_toolsets.slack`. The counts moved
+# CLI 17 -> 15 and Slack 7 -> 5. `kanban` is the clean case: it was in no list
+# anywhere, so only this key can have removed it. `bfl` left `cli:` in the same
+# commit, so which of the two levers fired for it was never isolated — keep
+# both. Convention since: a toolset removed profile-wide is out of every
+# `platform_toolsets` list AND named here. To restore one, delete it here
+# deliberately; do not re-add it to a list and expect that to switch it back on.
 #
 # THE NAMES MUST MATCH THE BUILD'S OWN LIST: `file`, `terminal`, `web`,
 # `browser`. The original block here said `files`, which silently matched
 # nothing — so of the four toolsets it was meant to remove, File Operations
 # was never actually removed. A wrong name fails silently; there is no error.
+#
+# But the names this key accepts are a SUPERSET of the ones the CLI validates:
+# `hermes tools disable … kanban` answers "Unknown toolset 'kanban'", while
+# `kanban` here works. That command rejecting a name is not evidence the name
+# will not work here — put it in, deploy, and read the count.
 #
 # SCOPE: this key is profile-wide, so it takes the toolset away from the
 # dashboard/CLI too. To remove something on Slack ONLY, use platform_toolsets

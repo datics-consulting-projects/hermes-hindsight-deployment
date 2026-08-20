@@ -48,15 +48,21 @@ oauth_config:
 settings:
   event_subscriptions:
     bot_events:
-      # ONLY app_mention, and this is the ONLY thing enforcing mention-only.
-      # Discovery (2026-08-20) found no `channels:` key in this build, so plan
-      # §6.3's `respondTo: mention` does not exist and there is no config-side
-      # second layer. Slack simply never delivers the channel's other messages.
+      # ONLY app_mention, and this is the FIRST of two things enforcing
+      # mention-only. Slack simply never delivers the channel's other messages.
       #
-      # Consequence: adding message.channels here is not a formality — it is
-      # the single decision that puts every message in the channel in front of
-      # the agent. If the bot turns out to be silent on @-mentions without it,
-      # that is a real tradeoff to weigh, not a bug to patch around.
+      # The second is the `slack:` block in config.yaml — require_mention,
+      # strict_mention, thread_require_mention — added 2026-08-20 (issues S9).
+      # It is inert while this list holds nothing but app_mention, and that is
+      # exactly what it is for: adding message.channels here starts the
+      # delivery those gates then reject, instead of opening the channel with
+      # nothing anywhere pushing back.
+      #
+      # So it is still a decision, not a formality. Weigh it, and re-run the
+      # silent negative control afterwards — post without mentioning the bot
+      # and confirm silence. If the bot turns out to be silent on @-mentions
+      # WITHOUT message.channels, that is a real tradeoff, not a bug to patch
+      # around.
       - app_mention
   interactivity:
     # No buttons, modals or shortcuts. Nothing in the agent needs them, and each

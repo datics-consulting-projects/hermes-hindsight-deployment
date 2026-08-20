@@ -537,7 +537,8 @@ Everything that can live in git does:
 | --- | --- | --- |
 | Scopes, events, DM settings | `agents/backoffice/slack-manifest.yaml` | Not mounted — Hermes never reads it. It is what you paste into Slack's App Manifest tab, kept in git so a widened permission is a reviewable commit rather than an invisible click. |
 | What the agent can *do* on Slack | `agents/backoffice/config.yaml`, `platform_toolsets.slack` | Already mounted `:ro`, so this needs **no `hermes config set` on the server**. Edit, commit, deploy. |
-| Who may talk to it | `hermes pairing`, in the volume | Not config-as-code — a runtime approval store. Audit it, don't expect to review it in git. |
+| How the agent behaves *on Slack* | `agents/backoffice/config.yaml`, top-level `slack:` | Mention gating, DMs, bots, the channel scope. Bridged into the `SLACK_*` variables the adapter reads. **The environment overrides this file**, so never set the same gate in `.env` as well. |
+| Who may talk to it | `hermes pairing`, in the volume; optionally `SLACK_ALLOWED_USERS` | Pairing is a runtime approval store — audit it, don't expect to review it in git. `SLACK_ALLOWED_USERS` is the declarable companion, and the one Slack gate with no config key, so it lives in the per-agent `.env`. |
 | The three tokens | `agents/backoffice/.env` (gitignored) | Per-agent, not root `.env`. The compose `environment:` list is container-wide — a second persona would inherit this bot's identity and be able to post as it. |
 
 ### Enabling it
@@ -547,8 +548,9 @@ exists but wants a configuration token that rotates every 12 hours — not worth
 rotating secret for one app). Everything else is a script.
 
 ```sh
-# 0. Confirm what this Hermes build calls things, then uncomment the
-#    channels.slack block in agents/backoffice/config.yaml.
+# 0. Confirm what this Hermes build calls things. The behaviour gates are
+#    already pinned in the slack: block of agents/backoffice/config.yaml;
+#    what is left to fill in there is slack.allowed_channels, at invite time.
 ./scripts/slack-preflight.sh discover
 ```
 
@@ -568,16 +570,25 @@ rotating secret for one app). Everything else is a script.
 Then `/invite` the bot to **exactly one** channel. It cannot read channels it
 was not invited to, so the invite is the scope.
 
-### Mention-only rests on one thing
+### Mention-only rests on two things
 
 The manifest subscribes to `app_mention` and nothing else, so Slack never
-delivers the channel's other messages. That is the *whole* mechanism — this
-build has no `channels:` config key, so there is no second layer and nothing to
-fall back on. Adding `message.channels` to the manifest is therefore a single
-decision that puts every message in the channel in front of the agent.
+delivers the channel's other messages. That is the first layer and still the
+strong one.
+
+The second is the `slack:` block in `agents/backoffice/config.yaml`:
+`require_mention`, `strict_mention`, `thread_require_mention`. This build has no
+`channels:` config key — plan §6.3 guessed wrong about the name, not about the
+idea. Three of those gates default to *off*, which is why they are pinned.
+
+They do nothing while `app_mention` is the only subscribed event, and that is
+what they are for: adding `message.channels` to the manifest starts a delivery
+the gates then reject, rather than opening the channel with nothing anywhere
+pushing back. It is still a decision to make deliberately.
 
 The test that matters is the silent one: post in the channel **without**
-mentioning the bot and confirm nothing happens.
+mentioning the bot and confirm nothing happens. Run it after every manifest
+change — a misparsed config fails *open*, by answering more people.
 
 ### The gate this opens
 

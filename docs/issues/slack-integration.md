@@ -7,20 +7,24 @@ Slack entry that belongs there is
 
 Plan and runbook: [slack-integration](../plans/slack-integration.md).
 
-Priority is *actual risk today*, given that no Slack app exists yet. Several of these become more
-severe the moment the bot is in a channel — that is noted where it applies.
+Priority is *actual risk today*. As of 2026-08-20 the app exists, the tokens are installed and the
+gateway is connected, but the bot has not been `/invite`d to any channel — so nobody outside the
+deployment can reach it yet. Several of these become materially worse the moment that invite
+happens; that is noted where it applies.
 
 | # | Priority | Issue | Status |
 |---|---|---|---|
-| [S2](#s2--no-slack-section-in-tools---summary--p-backoffice) | **P1** | No Slack section in `tools --summary -p backoffice` | Open — unexplained |
-| [S9](#s9--the-slack-behaviour-gates-are-unread) | **P1** | The Slack behaviour gates are unread — including the ones that fail open | Open |
+| [S10](#s10--the-slack-block-is-committed-but-unverified) | **P1** | The `slack:` block is committed but unverified | Open — **blocks the `/invite`** |
+| [S11](#s11--todo--slackallowed_channels-is-empty-so-the-invite-is-the-only-channel-scope) | P2 | **TODO** — `slack.allowed_channels` is empty, so the `/invite` is the only channel scope | Open — **do this at the `/invite`** |
 | [S3](#s3--memorywrite_approval-is-unverified) | P2 | `memory.write_approval` is unverified | Open |
-| [S4](#s4--mention-only-has-a-single-point-of-failure) | P2 | Mention-only may have a single point of failure | **Superseded by S9** |
-| [S1](#s1--slack-credential-schema) | — | Slack credential schema | **Resolved 2026-08-20** |
 | [S5](#s5--slash-commands-would-let-channel-members-disable-the-guardrails) | P2 | Slash commands would let channel members disable the guardrails | Mitigated — scope omitted |
 | [S6](#s6--slack-preflightsh-check-reads-the-wrong-env) | P3 | `slack-preflight.sh check` reads the wrong `.env` | Open |
 | [S7](#s7--the-default-profiles-gateway-restarts-itself) | P3 | The `default` profile's gateway restarts itself | Open — worked around by hand |
-| [S8](#s8--kanban-cannot-be-disabled-through-tools-disable) | P3 | `kanban` cannot be disabled through `tools disable` | Open — hand-removed |
+| [S8](#s8--toolsets-that-bypass-platform_toolsets) | P3 | Toolsets that bypass `platform_toolsets` | **Worked around 2026-08-20** — standing upgrade hazard |
+| [S9](#s9--the-slack-behaviour-gates-are-unread) | — | The Slack behaviour gates are unread | **Resolved 2026-08-20** — became S10 |
+| [S4](#s4--mention-only-may-have-a-single-point-of-failure) | — | Mention-only may have a single point of failure | **Resolved 2026-08-20** by S9 |
+| [S1](#s1--slack-credential-schema) | — | Slack credential schema | **Resolved 2026-08-20** |
+| [S2](#s2--whether-the-slack-toolset-restriction-is-applied) | — | Whether the Slack toolset restriction is applied | **Resolved 2026-08-20** |
 
 ---
 
@@ -58,37 +62,33 @@ nothing in this repo currently sets. That is now [S9](#s9--the-slack-behaviour-g
 
 ---
 
-## S2 — No Slack section in `tools --summary -p backoffice`
+## S2 — Whether the Slack toolset restriction is applied
 
-**Priority:** P1 — because the answer decides whether the Slack tool restriction is real.
+**Status: resolved 2026-08-20.** The map is read and applied.
 
-`hermes tools --summary -p backoffice` prints a CLI section (17/28) and **no Slack section at
-all**. The `default` profile prints one. Meanwhile `hermes config get platform_toolsets -p
-backoffice` returns exactly the committed map, including
-`slack: [clarify, memory, session_search, skills, todo]` — so the `:ro` config *is* being read.
+Run once the Slack app was credentialed and deployed, `hermes tools --summary -p backoffice` prints
+a **Slack (5/28)** row listing exactly `clarify, memory, session_search, skills, todo` — the
+committed `platform_toolsets.slack`, entry for entry. Every execution toolset (File Operations,
+Terminal & Processes, Code Execution, Web Search & Scraping, Computer Use, Task Delegation, Cron
+Jobs, Image Generation, TTS, Vision) is absent from the Slack row while present on CLI. The
+load-bearing control from [G8](gap-register.md#g8--slack-opens-before-the-readerwriter-split) is
+real.
 
-**This is not explained.** The plausible reading is that the summary enumerates platforms from a
-registry populated by `tools disable --platform` on the profile it is run against, whereas
-backoffice's entry arrived as a raw config file — the value is present, just not enumerated. That
-is a hypothesis, not a finding.
+**Why it looked broken.** Before the app existed the summary printed a CLI section and *no Slack
+section at all*, while `config get platform_toolsets -p backoffice` returned the committed map. The
+hypothesis recorded here was right: a platform is enumerated only once it is actually configured.
+The missing row had been evidence of nothing in either direction — which is why the decisive test
+was deferred to after the tokens landed instead of being read as a failure.
 
-**Why it matters.** `platform_toolsets.slack` is the load-bearing control from
-[G8](gap-register.md#g8--slack-opens-before-the-readerwriter-split). If it is not applied, the
-Slack surface has every execution toolset the CLI has.
+**Two things this does not prove.** Both are why the controls in
+[plan §5.7](../plans/slack-integration.md) still have to be run:
 
-**The decisive test comes after Slack is actually configured** (S1 → app → tokens → deploy):
-
-```sh
-docker exec -it hermes hermes tools --summary -p backoffice
-```
-
-| Result | Meaning |
-|---|---|
-| Slack section, 5/28 | The pinned map applies. Restriction confirmed. |
-| Slack section, 18/28 | The map is not being applied. **Do not `/invite`.** |
-| Still no Slack section | Inconclusive again; find another observable before opening the channel. |
-
-**Until this is green, treat the Slack toolset restriction as committed but unverified.**
+- `tools --summary` renders configuration back at you. It is not an observation of what the Slack
+  gateway does when a tool is called. Control 4 — asking the agent in-channel to run a shell
+  command — is the only test of that path.
+- The **first** run of this test returned 7/28, not 5: `kanban` and `bfl` were present despite
+  being absent from the map. See [S8](#s8--toolsets-that-bypass-platform_toolsets). Read the row's
+  contents, never just its count.
 
 ---
 
@@ -118,22 +118,28 @@ listed that does not exist.
 
 ## S4 — Mention-only may have a single point of failure
 
-**Priority:** P2. **Status: superseded by [S9](#s9--the-slack-behaviour-gates-are-unread).** The
-claim below was written before the env-var probe and is now only half true.
+**Status: resolved 2026-08-20** by [S9](#s9--the-slack-behaviour-gates-are-unread). It was not
+single-point; the second layer existed the whole time and this repo had not looked for it.
 
-`slack-manifest.yaml` subscribes to `app_mention` and no other bot event. Slack therefore never
-delivers the channel's other messages. This build has no `channels:` **config key**, so plan §6.3's
-`channels.slack.respondTo: mention` does not exist — but that is not the same as having no second
-layer. `SLACK_REQUIRE_MENTION`, `SLACK_STRICT_MENTION` and `SLACK_THREAD_REQUIRE_MENTION` exist in
-the install as *environment variables*, which is a lever this repo can set and never looked for.
-**Nothing here is a second layer until S9 confirms they are read and sets them.**
+`slack-manifest.yaml` subscribes to `app_mention` and no other bot event, so Slack never delivers
+the channel's other messages. That remains the first layer and the strongest one. The claim that it
+was the *only* one rested on there being no `channels:` config key — true, and irrelevant: the key
+is a top-level `slack:` block, and `require_mention`, `strict_mention` and `thread_require_mention`
+are now pinned in `agents/backoffice/config.yaml`.
 
-**The failure mode is silent and open.** If the manifest is ever edited to add `message.channels`,
-every message in the channel reaches the agent, and nothing anywhere else pushes back. A config
-that fails does so by answering *more* people, not fewer.
+**The failure mode it was written about is now covered.** If the manifest is ever edited to add
+`message.channels`, Slack starts delivering every message in the channel — and the adapter drops
+each one that does not mention the bot, instead of nothing anywhere pushing back. That is the
+whole point of setting gates that do nothing today: they are what a *future* widening runs into.
 
-**Guard:** the negative control — post without mentioning the bot, confirm silence — after every
-manifest change. The comment above `bot_events` in the manifest states this; keep it there.
+**Two things this does not retire:**
+
+- The gates are committed, not verified — [S10](#s10--the-slack-block-is-committed-but-unverified).
+  Until that closes, treat mention-only as single-point exactly as before.
+- **The negative control still runs after every manifest change.** Post without mentioning the bot,
+  confirm silence. A config that fails does so by answering *more* people, not fewer, so the silent
+  test is the only one that proves anything. The comment above `bot_events` in the manifest says
+  this; keep it there.
 
 ---
 
@@ -198,78 +204,225 @@ section as a check after every restart.
 
 ---
 
-## S8 — `kanban` cannot be disabled through `tools disable`
+## S8 — Toolsets that bypass `platform_toolsets`
 
-**Priority:** P3.
+**Status: worked around 2026-08-20.** Held at P3 as a standing upgrade hazard, not as a live
+defect. Supersedes the original entry, which was narrower (`kanban` only) and whose proposed
+workaround did not work.
 
-`hermes tools disable --platform slack … kanban` answers `✗ Unknown toolset 'kanban'`, yet `kanban`
-appears as enabled in `tools --summary` and in the generated `platform_toolsets` map. It is absent
-from `known_builtin_toolsets`, which is presumably why the name is rejected.
+**What happened.** With Slack configured, the first `tools --summary -p backoffice` showed
+**Slack 7/28** — the five pinned toolsets plus `kanban` and `bfl` (BFL FLUX 3 Video). Neither is in
+`platform_toolsets.slack`. `kanban` was in no list in the file at all; `bfl` was in `cli:` only.
+**Absence from the map did not disable either one**, which is exactly what this issue originally
+proposed as the fix.
 
-**Worked around:** the line is deleted by hand from the `slack:` list in
-`agents/backoffice/config.yaml`. Since that file is the mounted source of truth, the deletion is
-the config.
+**The lever that works** is `agent.disabled_toolsets`, which is profile-wide:
 
-**Unverified:** whether removing the line actually removes the toolset, or whether `kanban` is
-injected regardless of the map. This shares an observable with
-[S2](#s2--no-slack-section-in-tools---summary--p-backoffice) — both are answered by the same
-post-setup summary. A Slack row at 5/28 with no kanban settles it.
+```yaml
+agent:
+  disabled_toolsets: [browser, bfl, kanban]
+```
 
-**Why it is P3 and not lower:** kanban is a task-dispatch surface, not a read tool. It is the one
-remaining toolset on the Slack list whose blast radius is not obviously zero.
+CLI 17 → 15, Slack 7 → 5. `kanban` is the clean experiment: it was in no platform list, so only
+this key can have removed it. `bfl` left the `cli:` list in the same commit, so which of the two
+levers fired for it was never isolated — both are kept.
+
+**The name check is a superset.** `hermes tools disable --platform slack … kanban` answers
+`✗ Unknown toolset 'kanban'`, yet `kanban` in `agent.disabled_toolsets` works. That command
+rejecting a name is **not** evidence the name does nothing in config. Unchanged and still true in
+the other direction: a wrong name in `disabled_toolsets` fails silently (`files` for `file`), so
+the count in the summary is the only confirmation either way.
+
+**Why it stays open as a hazard.** The mechanism was never read out of the source.
+`known_builtin_toolsets` appears only under `/opt/hermes/hermes_cli/` — the code that writes the
+map and prints the summary — and the backoffice profile has no such key, because the `:ro` mount
+means Hermes cannot write one. The working theory is that toolsets outside the build's own registry
+are not governed by `platform_toolsets` at all and default to enabled. **Under that theory, any
+Hermes upgrade can add a toolset that arrives enabled on Slack.** After every upgrade, run
+`tools --summary -p backoffice` and read the Slack row's *contents*, not its count.
+
+**`bfl` is why this was not a P3 curiosity.** It is not a read tool: it calls an external API with
+channel-supplied text, and it spends money. `env | grep -iE 'bfl|flux'` inside the container
+returned nothing, so the toolset would have failed on call — but that is one credential away from
+live, arriving as an env change with no diff anywhere near Slack to show it. Hence the closing
+condition added to [plan §7](../plans/slack-integration.md).
 
 ---
 
 ## S9 — The Slack behaviour gates are unread
 
-**Priority:** P1. This is the successor to [S1](#s1--slack-credential-schema), and it decides how
-much of the Slack posture is enforced versus merely intended.
+**Status: resolved 2026-08-20.** Both probes were run against the installed build. The gates are
+real, they are read, and — with exactly one exception — they are **config keys as well as**
+environment variables. That last part is what several entries in this repo had wrong.
 
-The env-var probe returned ~68 `SLACK_*` identifiers. Alongside the three tokens are names that
-read as behaviour gates on exactly the properties this integration is trying to guarantee:
+**The mechanism, because no key name gives it away.** `gateway/config.py::load_gateway_config()`
+reads `<profile home>/config.yaml` — for `-p backoffice`, the `:ro` mount of
+`agents/backoffice/config.yaml` — and hands its top-level `slack:` mapping to the Slack plugin's
+`_apply_yaml_config` hook (`plugins/platforms/slack/adapter.py`), which translates each key into
+the `SLACK_*` variable the adapter reads at message time. The loader's own docstring states the
+priority: **environment variables, then `config.yaml`, then `gateway.json`, then built-in
+defaults.** Every assignment in the hook is guarded by `not os.getenv(...)`, so a gate set in both
+places is governed by the environment and the `config.yaml` line becomes decoration. **One gate,
+one home** — the reason `agents/backoffice/.env.example` now says so at length.
 
-| Name | What it looks like it controls | Why it matters here |
-|---|---|---|
-| `SLACK_REQUIRE_MENTION` | answer only when mentioned | would be the second layer S4 says does not exist |
-| `SLACK_STRICT_MENTION`, `SLACK_THREAD_REQUIRE_MENTION` | mention handling, incl. inside threads | a thread is where mention-only most plausibly leaks |
-| `SLACK_ALLOWED_USERS`, `SLACK_ALLOWED_CHANNELS` | who and where | a **declarable** allowlist — the plan currently says the only allowlist is the runtime `hermes pairing` store |
-| `SLACK_IGNORED_CHANNELS` | channel denylist | belt to the `/invite` braces |
-| `SLACK_DISABLE_DMS` | no DMs | enforces plan §6.2 at runtime, not just by withholding `im:*` scopes |
-| `SLACK_ALLOW_BOTS`, `SLACK_VIA_HERMES_ONLY` | who may trigger it | bot-to-bot loops, and an unattended input path |
-| `SLACK_ALLOW_ALL_USERS` | disables the allowlist | **never set this** |
-| `SLACK_FREE_RESPONSE_CHANNELS` | channels answered **without** a mention | the direct negation of mention-only |
+### The gates, their defaults, and where they live now
 
-**The list is a superset, and must not be read as a finding on its own.** The probe matched every
-uppercase `SLACK_*` identifier across 49,326 files, including vendored `slack_sdk` / `slack_bolt`
-and ordinary module constants — `SLACK_MENTION_RE`, `SLACK_USER_ID_RE`, `SLACK_AUDIO_MIME_TO_EXT`
-and `SLACK_TOKEN_PREFIXES` are regexes and dicts, not environment variables. Every env var is in
-the list; not everything in the list is an env var.
+| Env var | `slack:` key | Default | Fails | Set to |
+|---|---|---|---|---|
+| `SLACK_REQUIRE_MENTION` | `require_mention` | **`true`** | closed | `true` (pinned) |
+| `SLACK_STRICT_MENTION` | `strict_mention` | `false` | **open** | `true` |
+| `SLACK_THREAD_REQUIRE_MENTION` | `thread_require_mention` | `false` | **open** | `true` |
+| `SLACK_IGNORE_OTHER_USER_MENTIONS` | `ignore_other_user_mentions` | `false` | open | `true` |
+| `SLACK_DISABLE_DMS` | `disable_dms` | `false` | **open** | `true` |
+| `SLACK_ALLOW_BOTS` | `allow_bots` | `"none"` | closed | `"none"` (pinned) |
+| `SLACK_FREE_RESPONSE_CHANNELS` | `free_response_channels` | empty | closed | `[]` (pinned) |
+| `SLACK_MENTION_PATTERNS` | `mention_patterns` | empty | closed | unset — never set |
+| `SLACK_ALLOWED_CHANNELS` | `allowed_channels` | empty — **empty means every channel** | **open** | *left commented; needs the pilot channel's `C…` id* |
+| `SLACK_IGNORED_CHANNELS` | `ignored_channels` | empty | n/a | unset |
+| `SLACK_ALLOWED_USERS` | **none — environment only** | unset | closed | optional, in `.env` |
+| `SLACK_ALLOW_ALL_USERS` | none | unset | closed | **never set** |
 
-**Step 1 — separate env-reads from constants:**
+`require_mention` uses explicit-false parsing — anything unrecognised keeps gating **on**. It is
+the only gate in the table that was already safe, and it is pinned anyway so an upgrade cannot
+change a default out from under the deployment.
 
-```sh
-docker exec hermes sh -c '
-  grep -rhoE "(environ|getenv)[^A-Za-z]{1,8}SLACK_[A-Z0-9_]+" /opt/hermes 2>/dev/null \
-    | grep -oE "SLACK_[A-Z0-9_]+" | sort -u'
+`strict_mention` is the one worth understanding rather than copying: it makes every message in a
+thread need its own `@`-mention by disabling the adapter's auto-triggers — mentioned-thread memory,
+bot-message follow-up, session-presence — each of which answers a message that never mentioned the
+bot. S9 guessed that "a thread is where mention-only most plausibly leaks". That was right.
+
+**None of these do anything today**, and that is not an argument against setting them. With only
+`app_mention` subscribed, Slack delivers nothing for them to act on. They are the layer a future
+`message.channels` line in the manifest runs into — which is precisely what
+[S4](#s4--mention-only-may-have-a-single-point-of-failure) said did not exist.
+
+### Authorization, which is the exception
+
+`SLACK_ALLOWED_USERS` has no `slack:` key. `gateway/authz_mixin.py` resolves it through a
+platform→variable map (`Platform.SLACK: "SLACK_ALLOWED_USERS"`), so there is nothing for the YAML
+bridge to translate and it can only be an environment variable. It takes comma-separated `U…`
+member ids — the plugin's own `plugin.yaml` documents that — and complements `hermes pairing`
+rather than replacing it.
+
+Unset, the deployment already fails closed: `hermes gateway setup` prints *"No Slack allowlist set
+— unpaired users will be denied by default"* and names `SLACK_ALLOW_ALL_USERS` /
+`GATEWAY_ALLOW_ALL_USERS` as the way to undo that. Never set either.
+
+### Two corrections this probe produced
+
+1. **`SLACK_SIGNING_SECRET` is inert in this build.** No Slack code path reads it — it appears only
+   in the subprocess secret strip-list — and the plugin's `requires_env` names just
+   `SLACK_BOT_TOKEN` and `SLACK_APP_TOKEN`. Socket Mode authenticates with the app token; the
+   signing secret verifies inbound HTTP signatures, and there is no inbound HTTP here. Keeping it
+   set is harmless; believing it is what makes the connection work is not.
+2. **`SLACK_VIA_HERMES_ONLY` does not exist.** S9's own table listed it as a gate on "who may
+   trigger it". It is `_SLACK_VIA_HERMES_ONLY` in `hermes_cli/commands.py` — a frozenset of
+   subcommands reachable only via `/hermes …`. The entry that warned "the list is a superset, and
+   must not be read as a finding on its own" had already been caught by its own warning.
+
+### The lesson, which is the reverse of S1's
+
+S1's lesson was that an empty result from a broken search is not a finding. This one is the other
+direction: **a name absent from a narrow search is not absent from the build.** Step 1 matched
+`environ|getenv` within eight characters of the name and returned 26 of the original 68 — and
+missed `SLACK_ALLOWED_USERS` entirely, because it is never read by literal name. Had that list
+been treated as complete, the single most important gate here would have been written off as a
+regex constant.
+
+**Grep for the name, then for the read.** `grep -rl` on the bare name across `/opt/hermes`, minus
+`slack_sdk` / `slack_bolt`, is what found `authz_mixin.py`, `plugin.yaml` and the YAML bridge.
+
+---
+
+## S10 — The `slack:` block is committed but unverified
+
+**Priority:** P1. **Blocks the `/invite`**, inheriting that from
+[S9](#s9--the-slack-behaviour-gates-are-unread). This is S9's remainder: the gates are read out of
+the build and pinned in `agents/backoffice/config.yaml`, but nothing has yet observed this
+deployment *applying* them.
+
+**Why that is not pedantry.** It is the same shape as
+[S3](#s3--memorywrite_approval-is-unverified), and this repo has already been bitten twice by it:
+`hermes config set` is schemaless, a wrong toolset name fails silently, and `platform_toolsets`
+turned out not to govern `kanban` at all ([S8](#s8--toolsets-that-bypass-platform_toolsets)). The
+`slack:` block has been read out of the *source* and the loader path traced, which is more evidence
+than either of those ever had — and still not an observation.
+
+Two specific ways it could be inert: the block is dispatched only for platforms in the plugin
+registry, which requires the Slack plugin to have loaded; and any `SLACK_*` variable already in the
+process environment silently wins over its `config.yaml` twin.
+
+**The decisive test, and it needs no Slack traffic.** `allow_bots` is the one gate that announces
+itself: set to anything but `none`, the adapter logs a line at INFO on connect. So temporarily set
+
+```yaml
+slack:
+  allow_bots: "mentions"
 ```
 
-**Step 2 — read the defaults, which is where the actual risk is:**
+deploy, and read the log:
 
 ```sh
-docker exec hermes sh -c '
-  grep -rn -E "SLACK_(REQUIRE_MENTION|STRICT_MENTION|ALLOW_ALL_USERS|FREE_RESPONSE_CHANNELS|ALLOWED_USERS|DISABLE_DMS)\b" \
-    /opt/hermes --include=*.py | grep -vE "/(slack_sdk|slack_bolt)/" | head -40'
+./scripts/deploy.sh                       # its own log tail may already show it
+ssh "$HERMES_SSH" 'docker logs --tail 200 hermes' | grep -i allow_bots
+# expect: [Slack] allow_bots=mentions — for bot-to-bot interop also ensure: ...
 ```
 
-A gate defaulting to *on* is a control the deployment already has. A gate defaulting to *off* is a
-control only once this repo sets it — and one that fails open if nobody does.
+The line appearing proves the whole chain for this profile: `config.yaml` read → `slack:` block
+dispatched → key translated → adapter observed the result. **Then revert to `"none"` and deploy
+again** — this is a two-commit test, and leaving `mentions` in place would admit bot traffic past
+the human allowlist.
 
-**Then:** set the confirmed ones in `agents/backoffice/.env.example` with their meaning, and in the
-VPS `.env`. That moves mention-only and the allowlist from "one Slack manifest field" to
-"manifest **and** runtime gate", and makes the allowlist reviewable in `.env.example` rather than
-living only in the volume's pairing store.
+If the line does not appear, the block is inert and every gate in it has to move to
+`agents/backoffice/.env` instead, where the read path is already proven by the tokens working.
 
-**Update when resolved:** [S4](#s4--mention-only-may-have-a-single-point-of-failure), the mitigation
-table in [G8](gap-register.md#g8--slack-opens-before-the-readerwriter-split), and §2, §4 and §5 of
-[the plan](../plans/slack-integration.md) — all three currently state that no config-side gate
-exists, which was true of config **keys** and looks likely to be false of environment variables.
+**Also outstanding, and part of the same close:** the one gate in the block still unset —
+[S11](#s11--todo--slackallowed_channels-is-empty-so-the-invite-is-the-only-channel-scope).
+
+---
+
+## S11 — TODO — `slack.allowed_channels` is empty, so the `/invite` is the only channel scope
+
+**Priority:** P2. **Status: open, and it is a to-do rather than a defect** — it cannot be closed
+before the pilot channel exists, which is why it is carried here instead of being left as a
+commented line nobody re-reads.
+
+`slack.allowed_channels` is present in `agents/backoffice/config.yaml` but commented out. The
+adapter's own docstring is explicit about what that means:
+
+> When non-empty, messages from channels NOT in this set are silently ignored — even if the bot is
+> @mentioned. […] Empty set means no channel restriction.
+
+So today the bot would answer an `@`-mention in **any** channel it has been invited to, and the
+only thing scoping it is the `/invite` itself. That brace is real — Slack does not deliver events
+for channels the app is not in — but it is one action away from being wrong, and the action is a
+single click by anyone with the bot in their member list. This is a belt with no braces, which is
+the same shape as [S4](#s4--mention-only-may-have-a-single-point-of-failure) before it was closed.
+
+**The to-do, at invite time and not before:**
+
+1. Open the pilot channel in Slack → right-click its name → **Copy link**. The `C…` id is the last
+   path segment.
+2. Uncomment the key in `agents/backoffice/config.yaml` and put the id in it:
+
+   ```yaml
+   slack:
+     allowed_channels:
+       - "C0123456789"
+   ```
+
+3. Commit, `./scripts/deploy.sh`, then `/invite` — in that order, so the scope exists before the
+   bot does.
+
+**Do not put it in `.env` instead.** `SLACK_ALLOWED_CHANNELS` would work and would also silently
+override the whole `slack:` block's twin key; the channel id is not a secret and belongs in the
+diff. See the precedence note in [S9](#s9--the-slack-behaviour-gates-are-unread).
+
+**Verify:** invite the bot to a second, throwaway channel and `@`-mention it there. Silence is the
+pass. That is the only test that distinguishes "scoped" from "happens to be in one channel", and it
+is worth running once — the failure mode here is the config answering *more* people, so a positive
+test in the pilot channel proves nothing about it.
+
+**Related:** plan §5.6, which carries the same step in the runbook; and
+[G8](gap-register.md#g8--slack-opens-before-the-readerwriter-split), whose "one channel, explicit
+allowlist" mitigation row is only half-true until this lands.
