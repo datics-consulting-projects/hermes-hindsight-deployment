@@ -80,10 +80,10 @@ memory:
 # applies them.
 agent:
   disabled_toolsets:
-    - web
-    - terminal
-    - files
     - browser
+#    - web
+#    - terminal
+#    - files
 
 # --- Rest of the guardrail baseline — plan §11.2, NOT YET APPLIED ---------
 # Uncomment deliberately, one block at a time, and verify the agent still does
