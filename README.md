@@ -523,6 +523,9 @@ and no `NOTION_*` name is on it, so both reach `ntn` normally — no
 
 ## Slack
 
+Runbook and design: [docs/plans/slack-integration.md](docs/plans/slack-integration.md).
+Open defects: [docs/issues/slack-integration.md](docs/issues/slack-integration.md).
+
 The agent's second surface: one channel, mention-only, no DMs. Slack uses
 **Socket Mode** — an outbound WebSocket — so nothing about the Tailscale-only
 posture changes and **`docker-compose.yml` is not touched at all**. No port, no
@@ -588,7 +591,9 @@ files, code execution, browser, web, delegation or cron. Your CLI and dashboard
 keep all 18; the restriction is per-platform. Confirm after any change:
 
 ```sh
-docker exec -it hermes hermes tools --summary     # needs -it
+docker exec -it hermes hermes tools --summary -p backoffice
+# -it because it refuses without a TTY; -p because tool config is PER PROFILE
+# and a bare invocation reports `default`, which is not the profile that runs.
 ```
 
 **Memory writes are the part still resting on trust.** Hermes syncs turns to

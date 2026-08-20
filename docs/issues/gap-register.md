@@ -6,6 +6,10 @@ These are **actionable now** and independent of the phased roadmap in
 [the implementation plan](../plans/hermes-backoffice-agent-implementation-plan.md). Closing them
 leaves the current deployment strictly better whether or not the rest of the plan ever ships.
 
+Issues scoped to one surface live in their own file: see
+[slack-integration issues](slack-integration.md) (S1–S8). Only the plan deviation Slack represents
+is tracked here, as [G8](#g8--slack-opens-before-the-readerwriter-split).
+
 Priority reflects *actual risk today*, not position in the roadmap.
 
 | # | Priority | Gap | Status |
@@ -268,8 +272,6 @@ The argument was: §4 has not shipped, so the agent holds no `crm_*` tools, and
 `agents/backoffice/config.yaml` disables `web`, `terminal`, `files` and `browser` — so Slack only
 adds "people can say things that become memory". The second half is false.
 
-`docker exec -it hermes hermes tools --summary` reports:
-
 ```
 💼 Slack  (18/28)
   ✓ ⚡ Code Execution      ✓ 💻 Terminal & Processes    ✓ 📁 File Operations
@@ -277,9 +279,22 @@ adds "people can say things that become memory". The second half is false.
   ✓ 👥 Task Delegation     ✓ ⏰ Cron Jobs
 ```
 
-Identical to CLI. `agent.disabled_toolsets` is read by nothing — Hermes' generated config has no
-such key, and `hermes config set` is schemaless, so it accepts keys nothing enforces. `browser` was
-the only entry still listed there and Browser Automation is enabled.
+Identical to CLI — every execution toolset available on the shared surface.
+
+**Two separate causes, and the first was initially misdiagnosed.**
+
+1. `agent.disabled_toolsets` **does work**, but only for the profile whose config declares it, and
+   the first check was run without `-p` — so it reported `default`, which declares nothing. Run per
+   profile and the key is visibly effective: `-p backoffice` gives CLI 17/28 with Browser
+   Automation absent, against 18/28 with it present on `default`, `browser` being the sole entry.
+   **Tool state is per profile; a bare `hermes tools --summary` is not evidence about backoffice.**
+2. The block listed `files`, and this build's toolset is `file`. A name matching nothing is
+   silently ignored — no error, no warning — so File Operations was never removed even though the
+   config looked like it removed it. Names come from `known_builtin_toolsets` in the generated
+   config: `file`, `terminal`, `web`, `browser`.
+
+Independently, `agent.disabled_toolsets` is profile-wide: it would have taken the toolset off the
+dashboard too. Restricting the shared surface *only* needs `platform_toolsets`.
 
 **What that means concretely.** Invite the bot to a channel today and anyone who can post in it is
 one prompt away from an agent that runs shell commands, reads and writes files, executes code and
@@ -294,11 +309,17 @@ dashboard surface was not touched. The resulting map is pinned in
 `agents/backoffice/config.yaml`, so it is config-as-code rather than volume state and survives a
 `profile create --clone`.
 
-**The transferable lesson:** `hermes config set` is schemaless. It accepts and round-trips any key,
-enforced or not, and `config get` reports an unknown key and a real-but-unset key with the same
-"Config key not set". A key appearing in this repo's `config.yaml` is therefore **no evidence at
-all** that anything reads it. `hermes tools --summary` and equivalents are the only proof. Assume
-any guardrail added here is decoration until observed working.
+**Three transferable lessons, in order of how much time they cost:**
+
+1. **Check the right profile.** Every `hermes` command defaults to `default`, which is not the
+   profile the stack runs. A bare invocation looks authoritative and answers a different question.
+   This produced a wrong "the key does nothing" conclusion that was written into this register
+   before being caught.
+2. **A wrong toolset name is silent.** `files` vs `file` cost a guardrail, with no error anywhere.
+3. **`hermes config set` is schemaless.** It accepts and round-trips any key, enforced or not, and
+   `config get` reports an unknown key and a real-but-unset key identically as "Config key not
+   set". A key appearing in `config.yaml` is **no evidence** anything reads it — only observing the
+   effect is.
 
 **Mitigation in place:**
 
@@ -307,7 +328,7 @@ any guardrail added here is decoration until observed working.
 | `platform_toolsets.slack` — 5 toolsets | `agents/backoffice/config.yaml` | No terminal, file, code execution, computer use, browser, web, delegation or cron on Slack. **This is now the load-bearing control**, and unlike the one below it is verified. |
 | `memory.write_approval: true` | `agents/backoffice/config.yaml` | Retention staged for review rather than landing silently. **Partially verified:** the key round-trips through `config set`/`config get`, but `hermes memory` exposes only `setup/status/off/reset` — no approval subcommand — so nothing in the CLI confirms it is *enforced*. The evidence it is real is Slack's `/memory approval on\|off` gateway command, which the pilot manifest does not grant. |
 | `app_mention` as the only bot event | `agents/backoffice/slack-manifest.yaml` | Slack never delivers the channel's other messages, so mention-only holds at the Slack layer even if the config key is wrong. |
-| One channel, explicit allowlist | the `/invite`, and `channels.slack` | The bot cannot read channels it was not invited to. Never `GATEWAY_ALLOW_ALL_USERS=true`. |
+| One channel, explicit allowlist | the `/invite`, plus `hermes pairing` | The bot cannot read channels it was not invited to. Never `GATEWAY_ALLOW_ALL_USERS` or `SLACK_ALLOW_ALL_USERS`. `channels.slack` was named here before discovery; **no such config key exists** — the declarable form, if any, is `SLACK_ALLOWED_USERS`/`SLACK_ALLOWED_CHANNELS`, pending [S9](slack-integration.md#s9--the-slack-behaviour-gates-are-unread). |
 | No DM scopes | `slack-manifest.yaml` | No second, unwitnessed surface — plan §6.2. |
 
 **What this does *not* buy.** Write approval is a review queue, and a review queue only works while
@@ -337,3 +358,8 @@ two negative tests are the ones that actually prove the boundary.
 
 **Related:** plan §6, §10.1, §13.1 step 4; G1 (the other credential that must not reach a
 Slack-facing agent before the screening layer exists).
+
+**The rest of the Slack work does not live here.** This entry is the *deviation from the plan*.
+Slack's own defects and open questions — including whether the two mitigations above are actually
+enforced (S2, S3) — are tracked in [slack-integration issues](slack-integration.md), and the
+runbook is [docs/plans/slack-integration.md](../plans/slack-integration.md).

@@ -67,11 +67,20 @@ memory:
 #     the volume. There is no allowlist to keep in git — audit it instead:
 #       docker exec hermes hermes pairing list
 #     Never GATEWAY_ALLOW_ALL_USERS=true.
+#
+#   * CREDENTIALS ARE ENVIRONMENT VARIABLES, not config keys — SLACK_BOT_TOKEN,
+#     SLACK_APP_TOKEN, SLACK_SIGNING_SECRET, confirmed present in /opt/hermes.
+#     Nothing about Slack auth belongs in this file; it lives in the per-agent
+#     .env. So do the BEHAVIOUR gates (SLACK_REQUIRE_MENTION, SLACK_ALLOWED_*,
+#     SLACK_DISABLE_DMS) — do not look for config keys for those either.
+#
+# Runbook: docs/plans/slack-integration.md
+# Open defects: docs/issues/slack-integration.md (S9 is the live one).
 
 # What the agent may DO on Slack, as opposed to on the CLI. This is the key
 # `agent.disabled_toolsets` was mistaken for, and unlike that one it is real:
 # produced by `hermes tools disable --platform slack …` and verified with
-# `hermes tools --summary` (CLI stayed 18/28, Slack dropped to 6/28).
+# `hermes tools --summary -p backoffice` (CLI stayed 18/28, Slack dropped).
 #
 # The full map is pinned, not just the `slack:` entry, so a partial override
 # can never leave another platform's list undefined. Cost of pinning: a Hermes
@@ -81,7 +90,7 @@ memory:
 # Seeded on the writable `default` profile and copied here, exactly as the
 # header prescribes. `kanban` is removed by hand: `tools disable` rejects it as
 # an unknown toolset name yet it shows up enabled, so deleting the line is the
-# only lever — re-check with `tools --summary` after deploying.
+# only lever — re-check with `tools --summary -p backoffice` after deploying.
 platform_toolsets:
   cli:
     - bfl
@@ -131,25 +140,24 @@ platform_toolsets:
 # needs arrives through the memory provider. This is what enforces the limits
 # SOUL.md's "Boundaries" section describes; the persona states them, this
 # applies them.
-# !! CONFIRMED INERT — 2026-08-20. `hermes tools --summary` reports Slack at
-# 18/28 toolsets, identical to CLI, with Browser Automation ✓ ENABLED — and
-# `browser` is the only entry left in the list below. The key is read by
-# nothing: Hermes' generated config (_config_version 37) has no
-# `agent.disabled_toolsets`, and `hermes config set` is schemaless, so it
-# accepts any key and enforces only the ones something reads.
+# THIS KEY WORKS. Verified 2026-08-20 by comparing profiles:
 #
-# So this block is decoration, and the comment above it ("this is what enforces
-# the limits SOUL.md's Boundaries section describes") was never true. SOUL.md's
-# boundaries are prompting, nothing more.
+#   hermes tools --summary -p backoffice   -> CLI 17/28, Browser Automation ABSENT
+#   hermes tools --summary                 -> CLI 18/28, Browser Automation present
 #
-# THE REAL LEVER is per-platform: `hermes tools disable <toolset>` and the
-# top-level `platform_toolsets:` map, which has a first-class `slack:` entry.
-# Restricting Slack specifically is possible and is the thing to do before any
-# /invite — the agent as configured today would arrive in the channel holding
-# Terminal, File Operations, Code Execution, Computer Use and Web.
+# `browser` is the only entry below and it is the only difference. An earlier
+# note here claimed the opposite; that reading came from the bare (default)
+# profile's summary, which of course does not apply this file. Tool config is
+# per profile — always pass -p backoffice.
 #
-# Left in place rather than deleted: it is the record of what was intended, and
-# what has to be re-expressed through platform_toolsets to actually hold.
+# THE NAMES MUST MATCH THE BUILD'S OWN LIST: `file`, `terminal`, `web`,
+# `browser`. The original block here said `files`, which silently matched
+# nothing — so of the four toolsets it was meant to remove, File Operations
+# was never actually removed. A wrong name fails silently; there is no error.
+#
+# SCOPE: this key is profile-wide, so it takes the toolset away from the
+# dashboard/CLI too. To remove something on Slack ONLY, use platform_toolsets
+# above instead.
 agent:
   disabled_toolsets:
     - browser
