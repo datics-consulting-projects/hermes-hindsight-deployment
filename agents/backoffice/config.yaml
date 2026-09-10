@@ -29,7 +29,9 @@
 # OpenRouter answers "... is not a valid model ID" (HTTP 400). The provider
 # is a separate key; "default" holds the bare OpenRouter slug.
 model:
-  default: "nvidia/nemotron-3.5-lightning:free"
+  # default: "nvidia/nemotron-3.5-lightning:free" # erroneous and slow like the other Nemotron LLMs
+  # default: "~deepseek/deepseek-v4-flash-latest"
+  default: "~z-ai/glm-flash-latest"
   provider: openrouter
 
 memory:
@@ -200,11 +202,14 @@ platform_toolsets:
     - vision
     - web
   slack:
+    - terminal
     - clarify
     - memory
     - session_search
     - skills
     - todo
+    - terminal
+    - kanban
   telegram:
     - hermes-telegram
   discord:
@@ -263,9 +268,7 @@ agent:
   disabled_toolsets:
     - browser
     - bfl
-    - kanban
 #    - web
-#    - terminal
 #    - files
 
 # --- Rest of the guardrail baseline — plan §11.2, NOT YET APPLIED ---------
